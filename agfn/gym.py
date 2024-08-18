@@ -6,6 +6,7 @@ import itertools
 
 from agfn.utils import Environment, unique  
 from agfn.ricf import maximum_likelihood_batch_ricf
+from agfn.hitl import adj_to_edge_marks 
 
 class LogReward(nn.Module): 
 
@@ -425,8 +426,9 @@ class MAG(Environment):
         self.degrees = torch.vstack([self.degrees, batch_state.degrees]) 
         super().merge(batch_state) 
 
-    def draw(self, idx, labels=None): 
-        amat = self.adjacency_matrix[idx].cpu().numpy() 
+    def draw(self, idx, labels=None, amat=None):
+        if amat is None:   
+            amat = self.adjacency_matrix[idx].cpu().numpy() 
         graph = nx.from_numpy_array(amat, create_using=nx.MultiDiGraph())
         if labels is not None:  
             nx.relabel_nodes(graph, mapping={i:labels[i] for i in range(len(labels))}, copy=False) 
@@ -508,7 +510,7 @@ class MAG(Environment):
             ]).long() 
 
         mag.stopped[:] = 1. 
-        samples = DAG.sample_from_structured_gaussian(mag, num_samples, seed, device)
+        samples = MAG.sample_from_structured_gaussian(mag, num_samples, seed, device)
 
         assert nx.is_directed_acyclic_graph(dag) 
         return dag, samples 
@@ -546,3 +548,9 @@ class MAG(Environment):
             amat[bidirected, edge[0], edge[1]] = 1 
             amat[bidirected, edge[1], edge[0]] = 1 
         return amat  
+
+    @property 
+    def edge_marks(self): 
+        return adj_to_edge_marks(
+            self.adjacency_matrix 
+        )
