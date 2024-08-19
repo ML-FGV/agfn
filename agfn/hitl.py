@@ -14,14 +14,14 @@ from enum import Enum
 from agfn.ricf import maximum_likelihood_batch_ricf
 
 @torch.no_grad() 
-def sample_massive_batch(gflownet, create_env, num_batches): 
+def sample_massive_batch(gflownet, create_env, num_batches,  **expert_params): 
     env = create_env() 
     env = gflownet.sample(env) 
     log_rewards, loglik = env.log_reward(return_loglik=True) 
 
     for _ in tqdm.tqdm(range(num_batches - 1)): 
         env_i = create_env()
-        env_i = gflownet.sample(env_i) 
+        env_i = gflownet.sample(env_i, **expert_params) 
         env.merge(env_i) 
         log_rewards_i, loglik_i = env_i.log_reward(return_loglik=True)
         log_rewards = torch.hstack([log_rewards, log_rewards_i]) 

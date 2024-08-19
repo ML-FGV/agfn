@@ -97,7 +97,7 @@ class ForwardPolicyProduct(ForwardPolicyMeta):
         if actions is None: actions = self.get_actions(pol, batch_state.forward_mask) 
         return actions, torch.log(pol[batch_state.batch_ids, actions]) 
         
-def train(gflownet, create_env, epochs, batch_size, lr=1e-3, lr_logz=1e-1, lr_r=1e-5,  
+def train_wandb(gflownet, create_env, epochs, batch_size, lr=1e-3, lr_logz=1e-1, lr_r=1e-5,  
             min_eps=1e-2, use_scheduler=False, use_wandb=False):
     optimizer = torch.optim.NAdam([
         {'params': chain(gflownet.pf.parameters(), gflownet.pb.parameters()), 'lr': lr}, 
@@ -131,6 +131,27 @@ def train(gflownet, create_env, epochs, batch_size, lr=1e-3, lr_logz=1e-1, lr_r=
         
     return gflownet, losses  
 
+def train(gflownet, create_env, epochs, lr=1e-3, lr_logz=1e-1, use_scheduler=False):
+    optimizer = torch.optim.Adam([
+        {'params': chain(gflownet.pf.parameters(), gflownet.pb.parameters()), 'lr': lr}, 
+        {'params': gflownet.log_z, 'lr': lr_logz}]) 
+    scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, total_iters=epochs) 
+
+    losses = list() 
+    pbar = tqdm.tqdm(range(epochs), disable=False) 
+    for epoch in pbar: 
+        optimizer.zero_grad() 
+        env = create_env() 
+        loss = gflownet(env) 
+        loss.backward()     
+        optimizer.step() 
+        pbar.set_postfix(loss=loss.item()) 
+        # Update the exploration rate 
+        losses.append(loss.item()) 
+        if use_scheduler: 
+            scheduler.step() 
+    return losses  
+
 @torch.no_grad() 
 def init_logz(gflownet, create_env, num_batches, batch_size): 
     log_rewards = list() 
@@ -151,7 +172,7 @@ def init_logz(gflownet, create_env, num_batches, batch_size):
     assert gflownet.log_z.requires_grad 
 
 @torch.no_grad() 
-def sample_massive_batch(gflownet, create_env, num_batches, num_back_traj=1): 
+def sample_massive_batch(gflownet, create_env, num_batches, num_back_traj=1, **expert_params): 
     env = create_env() 
     env = gflownet.sample(env) 
     if num_back_traj is not None:
@@ -160,7 +181,7 @@ def sample_massive_batch(gflownet, create_env, num_batches, num_back_traj=1):
 
     for _ in tqdm.tqdm(range(num_batches - 1)): 
         env_i = create_env()
-        env_i = gflownet.sample(env_i) 
+        env_i = gflownet.sample(env_i, **expert_params) 
         env.merge(env_i) 
         if num_back_traj is not None: 
             marginal_log = torch.vstack([marginal_log, gflownet.sample_many_backward(
