@@ -3,26 +3,55 @@ import torch.nn as nn
 import networkx as nx 
 import numpy as np 
 import itertools 
+import pandas as pd 
+import pathlib 
 
 from agfn.utils import Environment, unique  
 from agfn.ricf import maximum_likelihood_batch_ricf
 from agfn.hitl import adj_to_edge_marks 
+from agfn.rpy2_utils import suppress_output, tensor3d_to_rmatrix  
 
-class LogReward(nn.Module): 
+from rpy2.robjects.packages import STAP 
+from rpy2.robjects import numpy2ri, pandas2ri, NULL 
+
+numpy2ri.activate()
+pandas2ri.activate() 
+
+HERE = pathlib.Path(__file__).parent
+
+class LogRewardMeta(nn.Module): 
+    
+    def __init__(self, device, temperature): 
+        super(LogRewardMeta, self).__init__() 
+        self.device = device 
+        self.temperature = temperature 
+        self.std = nn.Parameter(torch.tensor(1., device=device), requires_grad=False)   
+        self.mu = nn.Parameter(torch.tensor(0., device=device), requires_grad=False) 
+         
+        self.temperature = 1. 
+        
+    @torch.no_grad() 
+    def warmup(self, gflownet, create_env, num_batches): 
+        log_rewards = list() 
+        for _ in range(num_batches): 
+            env = create_env() 
+            env = gflownet.sample(env) 
+            log_rewards.append(env.log_reward()) 
+        log_rewards = torch.hstack(log_rewards)
+        is_nan = torch.isnan(log_rewards) 
+        self.mu.data = log_rewards[~is_nan].mean() 
+        self.std.data = log_rewards[~is_nan].std() 
+
+class LogReward(LogRewardMeta): 
 
     def __init__(self, dataset=None, gamma=.5, num_samples=None, num_nodes=None, temperature=1., device='cpu'): 
-        super(LogReward, self).__init__() 
+        super(LogReward, self).__init__(device=device, temperature=temperature) 
         if dataset is not None: 
             self.dataset = nn.Parameter(dataset.to(device), requires_grad=False) 
         else: 
             self.dataset = nn.Parameter(torch.zeros((num_samples, num_nodes), device=device), 
                                         requires_grad=False) 
- 
-        self.device = device  
-        self.mu = nn.Parameter(torch.tensor(0., device=device), requires_grad=False) 
-        self.std = nn.Parameter(torch.tensor(1., device=device), requires_grad=False)    
         self.gamma = nn.Parameter(torch.tensor(gamma, device=device), requires_grad=False)  
-        self.temperature = 1. 
         # We assume unit variance for the (independent) error terms
         # The model is a structural Gaussian model: 
         # X_{t} \sim \beta_{t}^{T} X_{-t} + \eps_{t}, 
@@ -41,17 +70,6 @@ class LogReward(nn.Module):
             return (- bic - self.mu) / (self.temperature * self.std)    
         else: 
             return (- bic - self.mu) / (self.temperature * self.std), max_loglikhood 
-         
-    @torch.no_grad() 
-    def warmup(self, gflownet, create_env, num_batches): 
-        log_rewards = list() 
-        for _ in range(num_batches): 
-            env = create_env() 
-            env = gflownet.sample(env) 
-            log_rewards.append(env.log_reward()) 
-        log_rewards = torch.hstack(log_rewards) 
-        self.mu.data = log_rewards.mean() 
-        self.std.data = log_rewards.std() 
 
 class LogRewardSimple(nn.Module): 
 
@@ -78,7 +96,43 @@ class LogRewardSlightlyComplex(nn.Module):
     def forward(self, batch_state, *args): 
         D, B = batch_state.directed_amat, batch_state.bidirected_amat 
         return (self.d_w * D).sum(dim=(1,2)) + (self.b_w * B).sum(dim=(1,2)) 
-    
+
+class LogRewardR(LogRewardMeta): 
+
+    def __init__(self, dataframe: pd.DataFrame, temperature: float = 1., group_var_idx: int | None = None, 
+                 device: str = 'cpu', path: str = f'{HERE}/../R/computeBIC.R'): 
+        super(LogRewardR, self).__init__(device=device, temperature=temperature) 
+        self.dataframe = dataframe 
+        self.rpath = path
+        if group_var_idx is not None: 
+            self.group_var = self.dataframe.columns[group_var_idx] 
+        else: 
+            self.group_var = NULL 
+
+        with open(self.rpath) as f:
+            self.compute_bic_module = STAP(f.read(), 'compute_bic_module')
+
+        self.total_evaluations = 0 
+        self.nan_evaluations = 0 
+
+    @torch.no_grad() 
+    def forward(self, batch_state, *args):
+        del args  
+        with suppress_output(): 
+            amatr  = tensor3d_to_rmatrix(batch_state.adjacency_matrix) 
+            bics = self.compute_bic_module.computeBIC(
+                amatr, 
+                self.dataframe,
+                self.group_var  
+            )
+        bics = torch.tensor(
+            bics, device=self.device 
+        )
+        self.total_evaluations += batch_state.batch_size 
+        self.nan_evaluations += torch.isnan(bics).sum().cpu().item() 
+        bics = torch.nan_to_num(bics, nan=-self.mu) 
+        return (- bics - self.mu) / (self.temperature * self.std)
+
 class MAG(Environment): 
 
     DIR_EDGES = 1 
