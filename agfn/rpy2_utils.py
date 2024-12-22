@@ -7,7 +7,7 @@ from rpy2.robjects.packages import importr
 from typing import Callable 
 from contextlib import contextmanager 
 
-rutils = importr('utils') 
+rutils = None 
 
 @contextmanager
 def suppress_output():
@@ -49,4 +49,6 @@ def tensor3d_to_rmatrix(tensor3d):
     ] 
 
 if __name__ == '__main__': 
+    rutils = importr('utils') 
+
     install_packages() 

@@ -28,7 +28,7 @@ class LogRewardMeta(nn.Module):
         self.std = nn.Parameter(torch.tensor(1., device=device), requires_grad=False)   
         self.mu = nn.Parameter(torch.tensor(0., device=device), requires_grad=False) 
          
-        self.temperature = 1. 
+        # self.temperature = 1. 
         
     @torch.no_grad() 
     def warmup(self, gflownet, create_env, num_batches): 
@@ -37,7 +37,7 @@ class LogRewardMeta(nn.Module):
             env = create_env() 
             env = gflownet.sample(env) 
             log_rewards.append(env.log_reward()) 
-        log_rewards = torch.hstack(log_rewards)
+        log_rewards = torch.hstack(log_rewards) ** self.temperature 
         is_nan = torch.isnan(log_rewards) 
         self.mu.data = log_rewards[~is_nan].mean() 
         self.std.data = log_rewards[~is_nan].std() 
@@ -60,16 +60,18 @@ class LogReward(LogRewardMeta):
 
     @torch.no_grad() 
     def forward(self, batch_state, return_loglik=False): 
+        del return_loglik
         parents_matrix, spouses_matrix = batch_state.directed_amat, batch_state.bidirected_amat   
         num_edges = parents_matrix.sum(dim=(-1, -2)) + (spouses_matrix.sum(dim=(-1, -2))) / 2 
         num_nodes = parents_matrix.shape[1] 
         num_samples = self.dataset.shape[0] 
         max_loglikhood = maximum_likelihood_batch_ricf(self.dataset, parents_matrix, spouses_matrix) 
         bic = - 2 * max_loglikhood + num_edges * np.log(num_samples) + 4 * self.gamma * num_edges * np.log(num_nodes) 
-        if not return_loglik: 
-            return (- bic - self.mu) / (self.temperature * self.std)    
-        else: 
-            return (- bic - self.mu) / (self.temperature * self.std), max_loglikhood 
+        # if not return_loglik: 
+        return (- bic - self.mu) / (self.temperature * self.std)    
+        # else: 
+        #     return (- bic - self.mu) / (self.temperature * self.std), max_loglikhood 
+
 
 class LogRewardSimple(nn.Module): 
 

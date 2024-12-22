@@ -18,7 +18,7 @@ def sample_massive_batch(gflownet, create_env, num_batches,  **expert_params):
     env = create_env() 
     env = gflownet.sample(env) 
     log_rewards = env.log_reward() 
-
+    
     for _ in tqdm.tqdm(range(num_batches - 1)): 
         env_i = create_env()
         env_i = gflownet.sample(env_i, **expert_params) 
