@@ -27,6 +27,11 @@ def main(config):
             config.num_nodes, config.max_degree, config.num_samples, device=config.device, seed=config.seed
         )  
         node_labels = [f'{i + 1}' for i in range(config.num_nodes)] 
+
+        # Save simulated data 
+        torch.save(
+            data, f'simulated-{config.num_nodes}-{config.num_samples}.pt'
+        )
     else: 
         data = pd.read_csv(config.filename) 
         node_labels = data.columns.tolist()  
