@@ -21,7 +21,7 @@ computeBIC <- function(mags, dat, group_var=NULL) {
       return(NA)
     } else {
       summ_fit <- lavaan::summary(fit$fit, fit.measures = TRUE)
-      return(summ_fit$fit["bic2"]) # bic2 vs bic
+      return(summ_fit$fit["bic"]) # bic2 vs bic
     }
   }
   
