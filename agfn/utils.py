@@ -69,18 +69,17 @@ class ForwardPolicyMeta(nn.Module, metaclass=ABCMeta):
         actions = actions.squeeze(dim=-1) 
         return actions     
 
-def train(gflownet, create_env, epochs, lr=1e-3, lr_logz=1e-1, use_scheduler=False):
-    optimizer = torch.optim.Adam([
+def train(gflownet, initial_state, epochs, lr=1e-3, lr_logz=1e-1, use_scheduler=False):
+    optimizer = torch.optim.AdamW([
         {'params': chain(gflownet.pf.parameters(), gflownet.pb.parameters()), 'lr': lr}, 
         {'params': gflownet.log_z, 'lr': lr_logz}]) 
     scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, total_iters=epochs) 
 
     losses = list() 
     pbar = tqdm.tqdm(range(epochs), disable=False) 
-    for epoch in pbar: 
+    for _ in pbar: 
         optimizer.zero_grad() 
-        env = create_env() 
-        loss = gflownet(env) 
+        loss = gflownet(deepcopy(initial_state)) 
         loss.backward()     
         optimizer.step() 
         pbar.set_postfix(loss=loss.item()) 
@@ -133,11 +132,10 @@ def marginal_dist(env, marginal_log, log_rewards, dim=0, return_indices=False):
         return learned_dist, target_dist, indices     
     return learned_dist, target_dist 
 
-from agfn.gflownet import GFlowNet
-def marginal_dist_batch(gflownet: GFlowNet, log_reward, env, num_batches):
+def marginal_dist_batch(gflownet, env, num_batches):
     learned_dist = list() 
     target_dist = list() 
-    for _ in num_batches: 
+    for _ in range(num_batches): 
         terminal_states = gflownet.sample(deepcopy(env)) 
         marginal_log = gflownet.sample_many_backward(
             terminal_states, num_trajectories=8 
@@ -153,4 +151,4 @@ def marginal_dist_batch(gflownet: GFlowNet, log_reward, env, num_batches):
             target_dist_batch
         )
     
-    return learned_dist, target_dist
+    return torch.hstack(learned_dist), torch.hstack(target_dist)

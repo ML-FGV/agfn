@@ -5,9 +5,10 @@ import numpy as np
 import itertools 
 import pandas as pd 
 import pathlib 
+import copy 
 
 from agfn.utils import Environment, unique  
-from agfn.ricf import maximum_likelihood_batch_ricf
+from agfn.ricf import reward_bic
 from agfn.hitl import adj_to_edge_marks 
 from agfn.rpy2_utils import suppress_output, tensor3d_to_rmatrix  
 
@@ -31,15 +32,16 @@ class LogRewardMeta(nn.Module):
         # self.temperature = 1. 
         
     @torch.no_grad() 
-    def warmup(self, gflownet, create_env, num_batches): 
+    def warmup(self, gflownet, initial_state, num_batches): 
+        if self.mu.data != 0.: 
+            return 
         log_rewards = list() 
-        for _ in range(num_batches): 
-            env = create_env() 
-            env = gflownet.sample(env) 
+        for _ in range(num_batches):  
+            env = gflownet.sample(copy.deepcopy(initial_state)) 
             log_rewards.append(env.log_reward()) 
         log_rewards = torch.hstack(log_rewards) ** self.temperature 
         is_nan = torch.isnan(log_rewards) 
-        self.mu.data = log_rewards[~is_nan].mean() 
+        self.mu.data = log_rewards[~is_nan].max() 
         self.std.data = log_rewards[~is_nan].std() 
 
 class LogReward(LogRewardMeta): 
@@ -59,19 +61,12 @@ class LogReward(LogRewardMeta):
         pass 
 
     @torch.no_grad() 
-    def forward(self, batch_state, return_loglik=False): 
-        del return_loglik
-        parents_matrix, spouses_matrix = batch_state.directed_amat, batch_state.bidirected_amat   
-        num_edges = parents_matrix.sum(dim=(-1, -2)) + (spouses_matrix.sum(dim=(-1, -2))) / 2 
-        num_nodes = parents_matrix.shape[1] 
-        num_samples = self.dataset.shape[0] 
-        max_loglikhood = maximum_likelihood_batch_ricf(self.dataset, parents_matrix, spouses_matrix) 
-        bic = - 2 * max_loglikhood + num_edges * np.log(num_samples) + 4 * self.gamma * num_edges * np.log(num_nodes) 
-        # if not return_loglik: 
-        return (- bic - self.mu) / (self.temperature * self.std)    
-        # else: 
-        #     return (- bic - self.mu) / (self.temperature * self.std), max_loglikhood 
-
+    def forward(self, batch_state): 
+        return (
+            reward_bic(
+                batch_state, self.dataset, gamma=0.5
+            ) - self.mu
+        ) / (self.temperature * self.std)
 
 class LogRewardSimple(nn.Module): 
 
@@ -190,8 +185,12 @@ class MAG(Environment):
         return amat 
     
     @torch.no_grad() 
-    def log_reward(self, return_loglik=False): 
-        return self._log_reward(self, return_loglik) 
+    def log_reward(self): 
+        return self._log_reward(self) 
+
+    @property 
+    def parents_and_spouses(self):
+        return self.directed_amat, self.bidirected_amat
 
     @property 
     @torch.no_grad() 
@@ -503,7 +502,16 @@ class MAG(Environment):
     # Static methods 
 
     @staticmethod 
-    def sample_from_structured_gaussian(dag, num_samples, seed=42, device='cpu'):
+    def sample_from_structured_gaussian(
+        dag, 
+        num_samples, 
+        seed=42,
+        beta_scale=.5, 
+        beta_loc=2., 
+        omega_scale=.1,
+        omega_loc=.1, 
+        device='cpu'
+    ):
         # We randomly generate correlational and structural matrices
         # and sample `num_samples` variables from the ensuing distribution
         parents_matrix, spouses_matrix = dag.directed_amat.squeeze(dim=0), dag.bidirected_amat.squeeze(dim=0) 
@@ -512,15 +520,11 @@ class MAG(Environment):
 
         g = torch.Generator(device=device) 
         # Sample a beta 
-        beta_scale = .5
-        beta_loc = 2.
         g.manual_seed(seed) 
         beta = beta_scale * torch.rand(size=(num_nodes, num_nodes), device=device, generator=g) + beta_loc
         beta = beta * parents_matrix
 
         # Sample `omega` from the correspondent Cholesky's decomposition
-        omega_scale = .1
-        omega_loc = .1
         g.manual_seed(2*seed) 
         omega = omega_scale * torch.rand(size=(num_nodes, num_nodes), device=device, generator=g) + omega_loc
         omega = torch.triu(omega).T @ torch.triu(omega) / num_nodes
@@ -543,21 +547,36 @@ class MAG(Environment):
         return samples 
 
     @staticmethod 
-    def generate_dag_with_bounded_degree(num_nodes, max_degree, num_samples, 
-                                         create_env, device='cpu', seed=42):
+    def generate_dag_with_bounded_degree(
+        num_nodes, 
+        max_degree, 
+        num_samples, 
+        device='cpu', 
+        seed=42, 
+        beta_scale=.5, 
+        beta_loc=2., 
+        omega_scale=.1,
+        omega_loc=.1, 
+        nx_dag=None, 
+        return_mag=False
+    ):
         g = torch.Generator(device=device) 
         g.manual_seed(seed) 
-        in_deg_sequence = torch.randint(max_degree, size=(num_nodes,), device=device, generator=g)
-        # randomly permute this sequence to create a list of out degrees 
-        rand_indices = torch.randperm(num_nodes) 
-        out_deg_sequence = in_deg_sequence[rand_indices]  
-        G = nx.directed_configuration_model(in_deg_sequence, out_deg_sequence, seed=seed)
-        dag = nx.DiGraph() 
-        dag.add_nodes_from(G.nodes()) 
-        dag.add_edges_from([(u, v) for (u, v) in G.edges() if u < v])
-        
+
+        if nx_dag is None:
+            in_deg_sequence = torch.randint(max_degree, size=(num_nodes,), device=device, generator=g)
+            # randomly permute this sequence to create a list of out degrees 
+            rand_indices = torch.randperm(num_nodes) 
+            out_deg_sequence = in_deg_sequence[rand_indices]  
+            G = nx.directed_configuration_model(in_deg_sequence, out_deg_sequence, seed=seed)
+            dag = nx.DiGraph() 
+            dag.add_nodes_from(G.nodes()) 
+            dag.add_edges_from([(u, v) for (u, v) in G.edges() if u < v])
+        else: 
+            dag = nx_dag
+    
         # Sample from the resulting model 
-        mag = create_env(batch_size=1)
+        mag = MAG(num_nodes, batch_size=1, log_reward=None, device=device)
         if len(dag.edges) > 0: 
             mag.edge_list = torch.hstack([
                 torch.zeros((len(dag.edges),1), device=device), 
@@ -566,10 +585,21 @@ class MAG(Environment):
             ]).long() 
 
         mag.stopped[:] = 1. 
-        samples = MAG.sample_from_structured_gaussian(mag, num_samples, seed, device)
+        samples = MAG.sample_from_structured_gaussian(
+            mag, 
+            num_samples, 
+            seed, 
+            beta_scale=beta_scale, 
+            beta_loc=beta_loc,
+            omega_scale=omega_scale,
+            omega_loc=omega_loc, 
+            device=device 
+        )
 
         assert nx.is_directed_acyclic_graph(dag) 
-        return dag, samples 
+        if return_mag: 
+            return dag, samples, mag
+        return dag, samples
 
     @staticmethod 
     def mag_to_pcalg(amat): 

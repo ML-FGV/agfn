@@ -73,10 +73,11 @@ class GFlowNet(nn.Module):
     def _trajectory_balance(self, batch_state): 
         traj_stats, F_traj, last_idx = self._sample_traj(batch_state) 
         loss = (traj_stats[0] - traj_stats[1]).sum(dim=1) - F_traj[batch_state.batch_ids, last_idx] + self.log_z 
+        loss = self._remove_unlikely_states(batch_state, loss)
         return (loss*loss).mean()  
 
     def _detailed_balance(self, batch_state): 
-        traj_stats, F_traj, last_idx = self._sample_traj(batch_state) 
+        traj_stats, F_traj, _ = self._sample_traj(batch_state) 
         loss = traj_stats[0] + F_traj[:, :-1] - traj_stats[1] - F_traj[:, 1:]
         return (loss*loss).mean() 
     
@@ -91,12 +92,19 @@ class GFlowNet(nn.Module):
         pb = traj_stats[1, :, j] - traj_stats[1, :, i] 
         loss = pf - pb + F_traj[:, i] - F_traj[:, j] 
         lamb = .9 ** (j - i).view(1, -1)  
-        loss = ((loss * loss) * lamb).sum(dim=1) / lamb.sum()   
+        loss = ((loss * loss) * lamb).sum(dim=1) / lamb.sum()  
+        loss = self._remove_unlikely_states(batch_state, loss) 
         return loss.mean() 
 
+    def _remove_unlikely_states(self, batch_state, losses): 
+        th = torch.quantile(batch_state.log_reward(), q=0.4) 
+        indices = batch_state.log_reward() > th
+        return losses[indices]
+    
     def _contrastive_balance_full(self, batch_state): 
         traj_stats, F_traj, last_idx = self._sample_traj(batch_state) 
         loss = (traj_stats[0] - traj_stats[1]).sum(dim=1) - F_traj[batch_state.batch_ids, last_idx]
+        loss = self._remove_unlikely_states(batch_state, loss)
         loss = (loss[:, None] - loss[None, :]) ** 2 
         return loss.mean() 
     
@@ -105,8 +113,10 @@ class GFlowNet(nn.Module):
         half_batch = batch_state.batch_size // 2 
         traj_stats, F_traj, last_idx = self._sample_traj(batch_state) 
         loss = (traj_stats[0] - traj_stats[1]).sum(dim=1) - F_traj[batch_state.batch_ids, last_idx] 
+        loss = self._remove_unlikely_states(batch_state, loss)
         loss = loss[:half_batch] - loss[half_batch:] 
         return (loss*loss).mean()   
+    
 
     @torch.no_grad() 
     def sample(self, batch_state, **expert_params): 

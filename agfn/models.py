@@ -20,11 +20,12 @@ class ForwardPolicy(ForwardPolicyMeta):
         for _ in range(self.num_layers): 
             self.mlp.append(nn.LeakyReLU()) 
             self.mlp.append(nn.Linear(hidden_dim, hidden_dim)) 
-        self.softplus = nn.Softplus() 
+            self.mlp.append(nn.LayerNorm((hidden_dim,))) 
+        
         self.mlp = self.mlp.to(self.device) 
-        self.mlp_logits = nn.Sequential(nn.LeakyReLU(), 
+        self.get_logits = nn.Sequential(nn.LeakyReLU(), 
                                         nn.Linear(self.hidden_dim, self.output_dim)).to(self.device)  
-        self.mlp_gflows = nn.Linear(hidden_dim, 1).to(self.device)
+        self.get_flows = nn.Linear(hidden_dim, 1).to(self.device)
     
     def get_latent_emb(self, batch_state): 
         amat = batch_state.adjacency_matrix.flatten(start_dim=1) 
@@ -32,12 +33,10 @@ class ForwardPolicy(ForwardPolicyMeta):
         return latent_emb 
 
     def get_pol(self, latent_emb, mask): 
-        logits = self.mlp_logits(latent_emb) 
-        pol = mask * self.softplus(logits) 
-        pol = pol / pol.sum(dim=1, keepdims=True) 
-        # logits = mask * logits + (1 - mask) * self.masked_value 
-        gflows = self.mlp_gflows(latent_emb).squeeze(dim=-1) 
-        # pol = torch.softmax(logits, dim=-1)      
+        logits = self.get_logits(latent_emb) 
+        logits = mask * logits + (1 - mask) * self.masked_value 
+        gflows = self.get_flows(latent_emb).squeeze(dim=-1) 
+        pol = torch.softmax(logits, dim=-1)      
         return pol, gflows 
     
     def forward(self, batch_state, actions=None): 

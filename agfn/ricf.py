@@ -87,11 +87,11 @@ def reward_log_likelihood(batch_states):
     return maximum_likelihood_batch_ricf(batch_states.data, parents_matrix, spouses_matrix) / batch_states.data.shape[0] 
 
 @torch.no_grad() 
-def reward_bic(batch_states, gamma=.5): 
+def reward_bic(batch_states, data, gamma=.5): 
     parents_matrix, spouses_matrix = batch_states.parents_and_spouses  
     num_edges = parents_matrix.sum(dim=(-1, -2)) + (spouses_matrix.sum(dim=(-1, -2))) / 2 
     num_nodes = parents_matrix.shape[1] 
-    num_samples = batch_states.data.shape[0] 
-    max_loglikhood = maximum_likelihood_batch_ricf(batch_states.data, parents_matrix, spouses_matrix) 
+    num_samples = data.shape[0] 
+    max_loglikhood = maximum_likelihood_batch_ricf(data, parents_matrix, spouses_matrix) 
     bic = - 2 * max_loglikhood + num_edges * np.log(num_samples) + 4 * gamma * num_edges * np.log(num_nodes) 
     return - bic 
