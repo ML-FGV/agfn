@@ -3,7 +3,7 @@ library(SEMgraph)
 library(lavaan)
 
 computeBIC <- function(mags, dat, group_var=NULL) {
-
+  
   getBIC <- function(ig.mag, dat, group_var=NULL) {
     fit <- tryCatch({
       if (!is.null(group_var)) {
@@ -107,4 +107,7 @@ if (runExample) {
   
   bics <- computeBIC(mags, test_data, group_var = "D")
   print(bics)
+
+  bics <- computeBIC(mags, test_data, group_var = "D")
+  
 }

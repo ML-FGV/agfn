@@ -116,7 +116,7 @@ class LogRewardR(LogRewardMeta):
     def forward(self, batch_state, *args):
         del args  
         with suppress_output(): 
-            amatr  = tensor3d_to_rmatrix(batch_state.adjacency_matrix) 
+            amatr  = tensor3d_to_rmatrix(batch_state.adjacency_matrix)
             bics = self.compute_bic_module.computeBIC(
                 amatr, 
                 self.dataframe,
