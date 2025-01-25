@@ -81,7 +81,7 @@ class GFlowNet(nn.Module):
         return (loss*loss).mean() 
     
     def _subtrajectory_balance(self, batch_state): 
-        traj_stats, F_traj, last_idx = self._sample_traj(batch_state) 
+        traj_stats, F_traj, _ = self._sample_traj(batch_state) 
         max_traj_length = batch_state.max_trajectory_length 
         i, j = torch.triu_indices(max_traj_length + 1, max_traj_length + 1, offset=1, device=self.device) 
         
