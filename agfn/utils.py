@@ -1,9 +1,10 @@
 import torch 
 import torch.nn as nn 
 import tqdm 
-import wandb 
+
 from itertools import chain 
 from abc import ABCMeta, abstractmethod  
+from copy import deepcopy 
 
 class Environment(metaclass=ABCMeta):
 
@@ -114,7 +115,7 @@ def unique(x, dim=-1):
     # inverse, perm = inverse.flip([dim]), perm.flip([dim])
     return values, inverse, counts, inverse.new_empty(values.size(dim)).scatter_(dim, inverse, perm)
 
-def marginal_dist(env, marginal_log, log_rewards, dim=-1, return_indices=False):
+def marginal_dist(env, marginal_log, log_rewards, dim=0, return_indices=False):
     if not torch.is_tensor(env): 
         values, inverse, counts, indices = unique(env.unique_input, dim=dim)
     else: 
@@ -131,3 +132,25 @@ def marginal_dist(env, marginal_log, log_rewards, dim=-1, return_indices=False):
     if return_indices: 
         return learned_dist, target_dist, indices     
     return learned_dist, target_dist 
+
+from agfn.gflownet import GFlowNet
+def marginal_dist_batch(gflownet: GFlowNet, log_reward, env, num_batches):
+    learned_dist = list() 
+    target_dist = list() 
+    for _ in num_batches: 
+        terminal_states = gflownet.sample(deepcopy(env)) 
+        marginal_log = gflownet.sample_many_backward(
+            terminal_states, num_trajectories=8 
+        ) 
+        learned_dist_batch, target_dist_batch = marginal_dist(
+            terminal_states, marginal_log, terminal_states.log_reward() 
+        )
+
+        learned_dist.append(
+            learned_dist_batch 
+        )
+        target_dist.append(
+            target_dist_batch
+        )
+    
+    return learned_dist, target_dist
