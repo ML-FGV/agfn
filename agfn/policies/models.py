@@ -1,9 +1,7 @@
 import torch
 import torch.nn as nn
-import torch_geometric as pyg
 
-from agfn.utils import ForwardPolicyMeta
-from copy import deepcopy
+from agfn.policies.meta import ForwardPolicyMeta
 
 
 class ForwardPolicy(ForwardPolicyMeta):
