@@ -36,7 +36,7 @@ def install_uninstalled(
 
 def install_packages():
     BIOC_PACKAGES = ["ggm", "graph", "RBGL", "Rgraphviz"]
-    CRAN_PACKAGES = ["dagitty", "igraph", "SEMgraph", "lavaan"]
+    CRAN_PACKAGES = ["dagitty", "igraph", "SEMgraph", "lavaan", "pcalg", "stringr"]
 
     # Install BiocManager
     biocmanager = install_uninstalled("BiocManager")
