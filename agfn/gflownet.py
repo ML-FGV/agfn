@@ -147,9 +147,9 @@ class GFlowNet(nn.Module):
         return (loss * loss).mean()
 
     @torch.no_grad()
-    def sample(self, batch_state, **expert_params):
+    def sample(self, batch_state):
         while (batch_state.stopped < 1).any():
-            out = self.pf(batch_state, **expert_params)
+            out = self.pf(batch_state)
             actions = out[0]
             batch_state.apply(actions)
         return batch_state
