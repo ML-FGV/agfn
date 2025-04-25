@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import networkx as nx
-import numpy as np
 import itertools
 import pandas as pd
 import pathlib
@@ -9,7 +8,6 @@ import copy
 
 from agfn.gym.meta import Environment
 from agfn.ricf import reward_bic
-from agfn.hitl import adj_to_edge_marks
 from agfn.rpy2_utils import suppress_output, tensor3d_to_rmatrix
 
 from rpy2.robjects.packages import STAP
@@ -830,6 +828,6 @@ class MAG(Environment):
             amat[bidirected, edge[1], edge[0]] = 1
         return amat
 
-    @property
-    def edge_marks(self):
-        return adj_to_edge_marks(self.adjacency_matrix)
+    # @property
+    # def edge_marks(self):
+    #     return adj_to_edge_marks(self.adjacency_matrix)
