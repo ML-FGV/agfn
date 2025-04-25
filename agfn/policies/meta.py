@@ -10,6 +10,7 @@ class ForwardPolicyMeta(nn.Module, metaclass=ABCMeta):
     def __init__(self, eps=0.3):
         super(ForwardPolicyMeta, self).__init__()
         self.eps = eps
+        self.posterior = None
 
     @abstractmethod
     def get_latent_emb(self):
@@ -18,6 +19,9 @@ class ForwardPolicyMeta(nn.Module, metaclass=ABCMeta):
     @abstractmethod
     def get_pol(self):
         pass
+
+    def set_posterior(self, posterior):
+        self.posterior = posterior
 
     def get_actions(self, pol, mask=None):
         if mask is None:

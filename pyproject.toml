@@ -1,0 +1,15 @@
+[project]
+name = "AGFN"
+version = "0.1.0"
+description = "AGFN"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.2.5",
+    "setuptools>=79.0.1",
+    "torch>=2.7.0",
+]
+
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"

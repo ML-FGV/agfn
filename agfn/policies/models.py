@@ -47,12 +47,12 @@ class ForwardPolicy(ForwardPolicyMeta):
 
 
 class KGForwardPolicy(ForwardPolicy):
-    def forward(self, batch_state, actions=None, posterior=None):
+    def forward(self, batch_state, actions=None):
         latent_emb = self.get_latent_emb(batch_state)
         pol, gflows = self.get_pol(latent_emb, batch_state.forward_mask)
 
-        if posterior is not None:
-            posterior_flattened = posterior.flatten().unsqueeze(0)
+        if self.posterior is not None:
+            posterior_flattened = self.posterior.flatten().unsqueeze(0)
             pol = posterior_flattened * pol
             pol = pol / pol.sum(dim=1, keepdims=True)
 

@@ -1,13 +1,13 @@
 import torch
 import numpy as np
 
-from typing import Callable
+from enum import Enum
 
 from agfn.gym.gym import MAG, LogReward
 from agfn.gflownet import GFlowNet
 
 
-class EdgeType:
+class EdgeType(Enum):
     NO_RELATIONSHIP = 0
     LEFT_CAUSES_RIGHT = 1
     RIGHT_CAUSES_LEFT = 2
@@ -33,7 +33,6 @@ def find_next_query(
     queries: list,
     responses: list,
     mask_queried_edges: bool = True,
-    oracle: Callable = lambda x: EdgeType.NO_RELATIONSHIP,
     pi: float = 0.95,
     initial_state: MAG = None,
     num_iterations: int = None,
@@ -45,32 +44,33 @@ def find_next_query(
     if mask_queried_edges:
         edge_indices = np.setdiff1d(edge_indices, queries)
 
-    queries_cp = queries.copy()
-    responses_cp = responses.copy()
-
     largest_entropy = -np.inf
     best_edge_to_query = None
 
     for edge_idx in edge_indices:
-        # Compute the distributions' entropy when the edge is added
+        queries_cp = queries.copy()
+        responses_cp = responses.copy()
 
+        expected_entropy = 0.0
         # First, compute the human-induced posterior distribution
-        response = oracle(edge_idx)
-        responses_cp.append(response)
+        for response in EdgeType:
+            queries_cp.append(edge_idx)
+            responses_cp.append(response.value)
 
-        posterior_dist = posterior_update(responses_cp, queries_cp, pi)
+            posterior_dist = posterior_update(responses_cp, queries_cp, pi)
 
-        gfn.set_posterior(posterior_dist)
+            gfn.set_posterior(posterior_dist)
 
-        # Compute the cross-entropy of the resulting distribution
-        # with the target distribution
-        entropy = gfn.cross_entropy_with_reward(
-            initial_state=initial_state,
-            num_iterations=num_iterations,
-        )
+            # Compute the cross-entropy of the resulting distribution
+            # with the target distribution
+            expected_entropy += gfn.cross_entropy_with_reward(
+                initial_state=initial_state, num_iterations=num_iterations
+            )
 
-        if entropy > largest_entropy:
-            largest_entropy = entropy
+        expected_entropy = expected_entropy / len(EdgeType)
+
+        if expected_entropy > largest_entropy:
+            largest_entropy = expected_entropy
             best_edge_to_query = edge_idx
 
     # Returns the index of the highest-uncertainty edge to query

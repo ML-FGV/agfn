@@ -3,6 +3,9 @@ import torch.nn as nn
 
 from copy import deepcopy
 
+from agfn.gym.gym import MAG
+from agfn.policies.models import ForwardPolicy, BackwardPolicy
+
 
 def huber_loss(diff, delta=9.0):
     diff_sq = diff * diff
@@ -14,7 +17,9 @@ def huber_loss(diff, delta=9.0):
 
 
 class GFlowNet(nn.Module):
-    def __init__(self, pf, pb, criterion="tb", device="cpu"):
+    def __init__(
+        self, pf: ForwardPolicy, pb: BackwardPolicy, criterion="tb", device="cpu"
+    ):
         super(GFlowNet, self).__init__()
         self.pf = pf
         self.pb = pb
@@ -212,3 +217,18 @@ class GFlowNet(nn.Module):
 
     def off_policy(self):
         return self.OffPolicyCtx(self)
+
+    def set_posterior(self, posterior):
+        self.pf.set_posterior(posterior)
+
+    def cross_entropy_with_reward(self, initial_state: MAG, num_iterations: int):
+        entropy = 0.0
+        for _ in range(num_iterations):
+            initial_state_cp = deepcopy(initial_state)
+
+            self.sample(initial_state_cp)
+
+            entropy += -initial_state_cp.log_reward().sum()
+
+        entropy = entropy / (initial_state.batch_size * num_iterations)
+        return entropy
