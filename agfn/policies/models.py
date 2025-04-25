@@ -47,30 +47,18 @@ class ForwardPolicy(ForwardPolicyMeta):
 
 
 class KGForwardPolicy(ForwardPolicy):
-    def forward(self, batch_state, actions=None, feedbacks=None):
+    def forward(self, batch_state, actions=None, posterior=None):
         latent_emb = self.get_latent_emb(batch_state)
-        mask = batch_state.forward_mask
-        pol, gflows = self.get_pol(latent_emb, mask)
-        if feedbacks is not None:
-            feedbacks = feedbacks / feedbacks.max(dim=1, keepdims=True).values
-            # the feedback does not affect the stopping probability
-            pol[:, :-1] = pol[:, :-1] * torch.hstack(
-                [
-                    feedbacks[:, 1],  # directed i < j, i -> j
-                    feedbacks[:, 2],  # directed i < j, j -> i
-                    feedbacks[:, 3],  # undirected i < j, j <-> i
-                ]
-            ).view(1, -1)
-            # if feedbacks[:, 0] == 0 for some edge, the process should continue
-            e1, e2, e3 = torch.chunk(mask[:, :-1], dim=1, chunks=3)
-            pol[:, -1] = pol[:, -1] * (
-                (e1 * e2 * e3 * feedbacks[:, 0].view(1, -1) + (1 - e1 * e2 * e3) * 1e5)
-                .min(dim=1)
-                .values  # minimum only over valid edges
-            )
+        pol, gflows = self.get_pol(latent_emb, batch_state.forward_mask)
+
+        if posterior is not None:
+            posterior_flattened = posterior.flatten().unsqueeze(0)
+            pol = posterior_flattened * pol
             pol = pol / pol.sum(dim=1, keepdims=True)
+
         if actions is None:
-            actions = self.get_actions(pol, mask)
+            actions = self.get_actions(pol, batch_state.forward_mask)
+
         return actions, torch.log(pol[batch_state.batch_ids, actions]), gflows
 
 
