@@ -27,7 +27,9 @@ class ForwardPolicyMeta(nn.Module, metaclass=ABCMeta):
         if mask is None:
             uniform_pol = torch.ones_like(pol)
         else:
-            uniform_pol = torch.where(torch.isclose(mask, 1.0), 1.0, self.masked_value)
+            uniform_pol = torch.where(
+                torch.isclose(mask, torch.ones_like(mask)), 1.0, self.masked_value
+            )
         uniform_pol = torch.softmax(uniform_pol, dim=-1)
         eps = 0.0 if not self.training else self.eps
         exp_pol = pol * (1 - eps) + eps * uniform_pol

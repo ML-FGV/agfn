@@ -2,7 +2,7 @@ import torch
 import numpy as np
 
 from enum import Enum
-
+from typing import Optional
 from agfn.gym.gym import MAG, LogReward
 from agfn.gflownet import GFlowNet
 
@@ -20,10 +20,18 @@ def posterior_update(
     num_edges: int,
     pi: float = 0.95,
 ):
+    indices = torch.arange(4).unsqueeze(0).repeat(num_edges, 1)
+    responses = torch.tensor(responses).unsqueeze(1)
+
     prior = torch.ones((num_edges, 4)) / 4
     posterior = prior.clone()
-    posterior[queries, responses] = prior * pi
+
+    posterior[queries] = prior[queries] * pi * (indices[queries] == responses) + (
+        1 - pi
+    ) * (indices[queries] != responses) * (1 / 3)
+
     posterior = posterior / posterior.sum(dim=1, keepdim=True)
+
     return posterior
 
 
@@ -34,10 +42,13 @@ def find_next_query(
     responses: list,
     mask_queried_edges: bool = True,
     pi: float = 0.95,
-    initial_state: MAG = None,
-    num_iterations: int = None,
+    initial_state: Optional[MAG] = None,
+    num_iterations: int = 25,
 ):
-    num_nodes = log_reward.dataset.shape[1]
+    if initial_state is None:
+        num_nodes = log_reward.dataset.shape[1]
+        initial_state = MAG(num_nodes, batch_size=128, log_reward=log_reward)
+
     num_edges = (num_nodes * (num_nodes - 1)) // 2
 
     edge_indices = np.arange(num_edges)
@@ -57,7 +68,7 @@ def find_next_query(
             queries_cp.append(edge_idx)
             responses_cp.append(response.value)
 
-            posterior_dist = posterior_update(responses_cp, queries_cp, pi)
+            posterior_dist = posterior_update(responses_cp, queries_cp, num_edges, pi)
 
             gfn.set_posterior(posterior_dist)
 

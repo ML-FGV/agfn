@@ -52,8 +52,17 @@ class KGForwardPolicy(ForwardPolicy):
         pol, gflows = self.get_pol(latent_emb, batch_state.forward_mask)
 
         if self.posterior is not None:
-            posterior_flattened = self.posterior.flatten().unsqueeze(0)
-            pol = posterior_flattened * pol
+            posterior_flattened = self.posterior.flatten()
+            # Filter out multiples of 4 (which represent not adding an edge)
+            posterior_stop_action = posterior_flattened[
+                torch.arange(len(posterior_flattened)) % 4 == 0
+            ].min()
+            posterior_edges = posterior_flattened[
+                torch.arange(len(posterior_flattened)) % 4 != 0
+            ].unsqueeze(0)
+
+            pol[:, :-1] = posterior_edges * pol[:, :-1]
+            pol[:, -1] = posterior_stop_action * pol[:, -1]
             pol = pol / pol.sum(dim=1, keepdims=True)
 
         if actions is None:
