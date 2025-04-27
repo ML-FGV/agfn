@@ -5,7 +5,9 @@ import itertools
 import pandas as pd
 import pathlib
 import copy
+import numpy as np
 
+from agfn.commons import EdgeType
 from agfn.gym.meta import Environment
 from agfn.ricf import reward_bic
 from agfn.rpy2_utils import suppress_output, tensor3d_to_rmatrix
@@ -831,3 +833,88 @@ class MAG(Environment):
     # @property
     # def edge_marks(self):
     #     return adj_to_edge_marks(self.adjacency_matrix)
+
+
+class MAG_HITL(MAG):
+    def __init__(
+        self,
+        num_nodes: int,
+        batch_size: int,
+        log_reward: nn.Module,
+        max_degree: int | None = None,
+    ):
+        self.num_edge_types = len(EdgeType)
+
+        super(MAG_HITL, self).__init__(
+            num_nodes, batch_size, log_reward, max_degree, device="cpu"
+        )
+
+        self.edges = torch.triu_indices(num_nodes, num_nodes, offset=1)
+
+        assert len(self.actions) == self.num_edge_types * self.max_num_edges
+        assert self.device == "cpu", "MAG_HITL must be instantiated on CPU"
+
+        # batch_index, node_index_1, node_index_2
+        self.edge_list = torch.zeros((0, 3), dtype=torch.long, device=self.device)
+
+        self.forward_mask = torch.ones(
+            (self.batch_size, self.actions.shape[0]), device=self.device
+        )
+        self.backward_mask = torch.zeros(
+            (self.batch_size, self.max_num_edges), device=self.device
+        )
+
+        # Remove unused attributes
+        del self.indices, self.edge_degree
+
+    def add_to_edge_list(self, indices, edge_nodes):
+        self.edge_list = torch.vstack(
+            [
+                self.edge_list,
+                torch.hstack(
+                    [
+                        indices.unsqueeze(0),
+                        edge_nodes,
+                    ]
+                ),
+            ]
+        )
+
+    def mask_added_edges(self, edge_nodes_indices: torch.Tensor):
+        for edge_type in range(self.num_edge_types):
+            self.forward_mask[
+                self.batch_ids, self.max_num_edges * edge_type + edge_nodes_indices
+            ] = 0.0
+
+    def apply(self, indices: torch.Tensor):
+        edge_nodes_indices = indices % self.max_num_edges
+        edge_nodes = self.edges[edge_nodes_indices]
+
+        # Check the edge type based on the index
+        edge_types = indices.numpy() // self.max_num_edges
+        edge_types = [EdgeType(et) for et in edge_types]
+
+        left_causes_right_indices = np.argwhere(
+            edge_types == EdgeType.LEFT_CAUSES_RIGHT
+        )
+        right_causes_left_indices = np.argwhere(
+            edge_types == EdgeType.RIGHT_CAUSES_LEFT
+        )
+
+        latent_confounding_indices = np.argwhere(
+            edge_types == EdgeType.LATENT_CONFOUNDING
+        )
+
+        self.add_to_edge_list(left_causes_right_indices, edge_nodes)
+        self.add_to_edge_list(right_causes_left_indices, edge_nodes[..., [1, 0]])
+        self.add_to_edge_list(latent_confounding_indices, edge_nodes)
+        self.add_to_edge_list(latent_confounding_indices, edge_nodes[..., [1, 0]])
+
+        self.mask_added_edges(edge_nodes_indices)
+
+        self.edge_list = torch.vstack([self.edge_list, self.actions[indices]])
+
+    def backward(self, indices):
+        super(MAG_HITL, self).backward(indices)
+
+        self.edge_list = torch.vstack([self.edge_list, self.actions[indices]])

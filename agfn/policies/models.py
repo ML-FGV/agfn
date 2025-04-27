@@ -54,12 +54,12 @@ class KGForwardPolicy(ForwardPolicy):
         if self.posterior is not None:
             posterior_flattened = self.posterior.flatten()
             # Filter out multiples of 4 (which represent not adding an edge)
-            posterior_stop_action = posterior_flattened[
-                torch.arange(len(posterior_flattened)) % 4 == 0
-            ].min()
             posterior_edges = posterior_flattened[
                 torch.arange(len(posterior_flattened)) % 4 != 0
             ].unsqueeze(0)
+            posterior_stop_action = posterior_flattened[
+                torch.arange(len(posterior_flattened)) % 4 == 0
+            ].min()
 
             pol[:, :-1] = posterior_edges * pol[:, :-1]
             pol[:, -1] = posterior_stop_action * pol[:, -1]

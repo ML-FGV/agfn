@@ -1,17 +1,10 @@
 import torch
 import numpy as np
-
-from enum import Enum
 from typing import Optional
+
+from agfn.commons import EdgeType
 from agfn.gym.gym import MAG, LogReward
 from agfn.gflownet import GFlowNet
-
-
-class EdgeType(Enum):
-    NO_RELATIONSHIP = 0
-    LEFT_CAUSES_RIGHT = 1
-    RIGHT_CAUSES_LEFT = 2
-    LATENT_CONFOUNDING = 3
 
 
 def posterior_update(
@@ -86,3 +79,17 @@ def find_next_query(
 
     # Returns the index of the highest-uncertainty edge to query
     return best_edge_to_query
+
+
+def get_response_from_oracle(query: int, adj: torch.Tensor) -> EdgeType:
+    i, j = torch.triu_indices(adj.shape[0], adj.shape[1], offset=1)
+    i, j = i[query].item(), j[query].item()
+
+    if adj[i, j] == 1 and adj[j, i] == 1:
+        return EdgeType.LATENT_CONFOUNDING
+    elif adj[i, j] == 1:
+        return EdgeType.LEFT_CAUSES_RIGHT
+    elif adj[j, i] == 1:
+        return EdgeType.RIGHT_CAUSES_LEFT
+    else:
+        return EdgeType.NO_RELATIONSHIP
