@@ -3,6 +3,9 @@ import torch.nn as nn
 
 from abc import ABCMeta, abstractmethod
 
+from agfn.gym import MAG, MAG_HITL
+from typing import Union
+
 
 class ForwardPolicyMeta(nn.Module, metaclass=ABCMeta):
     masked_value = -1e5
@@ -36,3 +39,10 @@ class ForwardPolicyMeta(nn.Module, metaclass=ABCMeta):
         actions = torch.multinomial(exp_pol, num_samples=1, replacement=True)
         actions = actions.squeeze(dim=-1)
         return actions
+
+    def forward(self, batch_state: Union[MAG, MAG_HITL], actions=None):
+        latent_emb = self.get_latent_emb(batch_state)
+        pol, gflows = self.get_pol(latent_emb, batch_state.forward_mask)
+        if actions is None:
+            actions = self.get_actions(pol, batch_state.forward_mask)
+        return actions, torch.log(pol[batch_state.batch_ids, actions]), gflows

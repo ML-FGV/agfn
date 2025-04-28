@@ -38,13 +38,6 @@ class ForwardPolicy(ForwardPolicyMeta):
         pol = torch.softmax(logits, dim=-1)
         return pol, gflows
 
-    def forward(self, batch_state, actions=None):
-        latent_emb = self.get_latent_emb(batch_state)
-        pol, gflows = self.get_pol(latent_emb, batch_state.forward_mask)
-        if actions is None:
-            actions = self.get_actions(pol, batch_state.forward_mask)
-        return actions, torch.log(pol[batch_state.batch_ids, actions]), gflows
-
 
 class KGForwardPolicy(ForwardPolicy):
     def forward(self, batch_state, actions=None):
