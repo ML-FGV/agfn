@@ -1,7 +1,5 @@
-import rpy2
 import os
 import sys
-import rpy2.robjects as robjects  # type: ignore
 from rpy2.robjects.packages import importr
 
 from typing import Callable
