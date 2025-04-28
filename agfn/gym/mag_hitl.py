@@ -224,3 +224,8 @@ class MAG_HITL(MAG):
     def backward(self, indices):
         del indices
         raise NotImplementedError("Backward is not implemented for MAG_HITL")
+
+    def f2b(self, actions):
+        # forward_action = num_edges * edge_type + edge_index
+        # backward_action = edge_index
+        return actions % self.max_num_edges
