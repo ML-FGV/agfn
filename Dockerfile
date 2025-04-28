@@ -20,3 +20,5 @@ RUN echo $CACHEBUST
 COPY . .
 
 RUN /opt/venv/bin/python3 agfn/rpy2_utils.py
+
+#RUN Rscript R/computeSHD.R
