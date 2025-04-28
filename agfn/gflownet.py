@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from copy import deepcopy
 
-from agfn.gym.gym import MAG
+from agfn.gym import MAG
 from agfn.policies.models import ForwardPolicy, BackwardPolicy
 
 
