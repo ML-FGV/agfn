@@ -67,7 +67,7 @@ class GFlowNet(nn.Module):
         is_stopped = torch.zeros(
             (batch_state.batch_size,), dtype=bool, device=self.device
         )
-        while (batch_state.stopped < 1).any():
+        while not is_stopped.all():
             # Sample the actions
             out = self.pf(batch_state)
             actions, pf, F = out[0], out[1], out[2]
@@ -78,15 +78,17 @@ class GFlowNet(nn.Module):
             # Corresponding backward actions
             out = self.pb(batch_state, actions)
             pb = out[1]
+            assert not torch.isinf(pb).any()
 
             # Save values
             traj_stats[0, ~is_stopped, i] = pf[~is_stopped]
             traj_stats[1, ~is_stopped, i] = pb[~is_stopped]
+
             F_traj[~is_stopped, i] = F[~is_stopped]
             # Check whether it already stopped
-            is_stopped = batch_state.stopped.bool()
+            is_stopped = batch_state.stopped
             i += 1
-            last_idx += (1 - batch_state.stopped).long()
+            last_idx += 1 - is_stopped.long()
 
         F_traj[batch_state.batch_ids, last_idx + 1] = batch_state.log_reward()
         return traj_stats, F_traj, last_idx + 1
@@ -98,7 +100,6 @@ class GFlowNet(nn.Module):
             - F_traj[batch_state.batch_ids, last_idx]
             + self.log_z
         )
-        loss = self._remove_unlikely_states(batch_state, loss)
         return (loss * loss).mean()
 
     def _detailed_balance(self, batch_state):
@@ -125,11 +126,6 @@ class GFlowNet(nn.Module):
         loss = ((loss * loss) * lamb).sum(dim=1) / lamb.sum()
         loss = self._remove_unlikely_states(batch_state, loss)
         return loss.mean()
-
-    def _remove_unlikely_states(self, batch_state, losses):
-        th = torch.quantile(batch_state.log_reward(), q=0.4)
-        indices = batch_state.log_reward() > th
-        return losses[indices]
 
     def _contrastive_balance_full(self, batch_state):
         traj_stats, F_traj, last_idx = self._sample_traj(batch_state)

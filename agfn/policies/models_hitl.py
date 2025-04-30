@@ -12,7 +12,9 @@ class ForwardPolicy(ForwardPolicyMeta):
         self.num_nodes = num_nodes
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-        self.output_dim = 2 * num_nodes * (num_nodes - 1)  # 4 actions for each edge
+        self.output_dim = (
+            2 * num_nodes * (num_nodes - 1)
+        )  # n * (n - 1) / 2 edges 4 * actions for each edge
 
         self.mlp = nn.Sequential()
         self.mlp.append(nn.Linear(self.num_nodes * self.num_nodes, hidden_dim))
@@ -38,7 +40,9 @@ class ForwardPolicy(ForwardPolicyMeta):
         logits = mask * logits + (1 - mask) * self.masked_value
         # Currently, we avoid flow estimation for HITL (constraining, e.g.,
         # the training to trajectory-like balance objectives)
-        flows = torch.zeros_like(logits)
+        flows = torch.zeros(
+            (logits.shape[0],), device=logits.device, dtype=logits.dtype
+        )
         pol = torch.softmax(logits, dim=1)
 
         if self.posterior is not None:
@@ -61,9 +65,8 @@ class BackwardPolicy(nn.Module):
         self.device = device
 
     def forward(self, batch_state: MAG_HITL, actions=None):
-        uniform_pol = torch.where(
-            batch_state.backward_mask == 1.0, 1.0, self.masked_value
-        )
+        mask = batch_state.backward_mask.clone()
+        uniform_pol = torch.where(mask == 1.0, 1.0, self.masked_value)
         uniform_pol = torch.softmax(uniform_pol, dim=-1)
 
         if actions is not None:
@@ -72,4 +75,7 @@ class BackwardPolicy(nn.Module):
             actions = torch.multinomial(uniform_pol, num_samples=1, replacement=True)
             actions = actions.squeeze(dim=-1)
 
-        return actions, torch.log(uniform_pol[batch_state.batch_ids, actions])
+        pol = uniform_pol[batch_state.batch_ids, actions]
+        print(actions[pol == 0.0], mask[pol == 0.0])
+
+        return actions, torch.log(pol)

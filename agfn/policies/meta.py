@@ -41,8 +41,9 @@ class ForwardPolicyMeta(nn.Module, metaclass=ABCMeta):
         return actions
 
     def forward(self, batch_state: Union[MAG, MAG_HITL], actions=None):
+        mask = batch_state.forward_mask.clone()
         latent_emb = self.get_latent_emb(batch_state)
-        pol, gflows = self.get_pol(latent_emb, batch_state.forward_mask)
+        pol, gflows = self.get_pol(latent_emb, mask)
         if actions is None:
-            actions = self.get_actions(pol, batch_state.forward_mask)
+            actions = self.get_actions(pol, mask)
         return actions, torch.log(pol[batch_state.batch_ids, actions]), gflows

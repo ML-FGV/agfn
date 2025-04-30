@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-from agfn.commons import EdgeType
+from agfn.commons import EdgeType, outer_product, elementwise_maximum
 from agfn.gym.mag import MAG
 
 
@@ -20,13 +20,14 @@ class MAG_HITL(MAG):
             num_nodes, batch_size, log_reward, max_degree, device="cpu"
         )
 
-        self.edges = torch.triu_indices(num_nodes, num_nodes, offset=1)
-
-        assert len(self.actions) == self.num_edge_types * self.max_num_edges
-        assert self.device == "cpu", "MAG_HITL must be instantiated on CPU"
+        self.edges = torch.triu_indices(num_nodes, num_nodes, offset=1).t()
+        self.transition_step = 0
 
         # batch_index, node_index_1, node_index_2
         self.edge_list = torch.zeros((0, 3), dtype=torch.long, device=self.device)
+        self.edge_is_bidirected = torch.zeros(
+            (0,), dtype=torch.bool, device=self.device
+        )
 
         self.forward_mask = torch.ones(
             (self.batch_size, self.actions.shape[0]), device=self.device
@@ -49,28 +50,66 @@ class MAG_HITL(MAG):
 
         node_indices = torch.arange(self.num_nodes, device=self.device)
         self.alpha[:, node_indices, node_indices] = 1.0
-        self.beta[:, node_indices, node_indices] = 1.0
 
         self.left_causes_right_action_indices = (
             torch.arange(self.max_num_edges)
-            + self.max_num_edges * EdgeType.LEFT_CAUSES_RIGHT
+            + self.max_num_edges * EdgeType.LEFT_CAUSES_RIGHT.value
         )
         self.right_causes_left_action_indices = (
             torch.arange(self.max_num_edges)
-            + self.max_num_edges * EdgeType.RIGHT_CAUSES_LEFT
+            + self.max_num_edges * EdgeType.RIGHT_CAUSES_LEFT.value
         )
         self.latent_confounding_action_indices = (
             torch.arange(self.max_num_edges)
-            + self.max_num_edges * EdgeType.LATENT_CONFOUNDING
+            + self.max_num_edges * EdgeType.LATENT_CONFOUNDING.value
         )
 
-    def add_to_edge_list(self, indices, edge_nodes):
+        # A forward action corresponds to adding a edge of a given type
+        self.forward_mask = torch.ones(
+            (self.batch_size, self.max_num_edges * self.num_edge_types),
+            device=self.device,
+        )
+
+        # A backward action corresponds to removing an edge
+        self.backward_mask = torch.zeros(
+            (self.batch_size, self.max_num_edges), device=self.device
+        )
+
+    def add_to_edge_list(
+        self, indices: np.ndarray, edge_nodes: torch.Tensor, is_bidirected: bool
+    ):
+        indices = torch.from_numpy(indices)
         self.edge_list = torch.vstack(
             [
                 self.edge_list,
-                torch.hstack([indices.unsqueeze(0), edge_nodes]),
+                torch.hstack([indices.unsqueeze(1), edge_nodes[indices]]),
             ]
         )
+
+        if is_bidirected:
+            self.edge_list = torch.vstack(
+                [
+                    self.edge_list,
+                    torch.hstack(
+                        [indices.unsqueeze(1), edge_nodes[..., [1, 0]][indices]]
+                    ),
+                ]
+            )
+
+            self.edge_is_bidirected = torch.hstack(
+                [
+                    self.edge_is_bidirected,
+                    torch.ones_like(indices, dtype=self.edge_is_bidirected.dtype),
+                    torch.ones_like(indices, dtype=self.edge_is_bidirected.dtype),
+                ]
+            )
+        else:
+            self.edge_is_bidirected = torch.hstack(
+                [
+                    self.edge_is_bidirected,
+                    torch.zeros_like(indices, dtype=self.edge_is_bidirected.dtype),
+                ]
+            )
 
     def update_directed_paths(self, indices: torch.Tensor, edge_nodes: torch.Tensor):
         # Marks x -> y as a directed path
@@ -78,81 +117,98 @@ class MAG_HITL(MAG):
 
         # For each (a, b), if there is a path a -> x and y -> b, then there is a path a -> x -> y -> b
         # when the edge x -> y is appended to the graph
-        self.alpha[indices] = torch.maximum(
+        self.alpha[indices] = elementwise_maximum(
             self.alpha[indices],
-            self.alpha[indices, edge_nodes[indices, 0], :]
-            @ self.alpha[indices, :, edge_nodes[indices, 1]],
+            outer_product(
+                self.alpha[indices, :, edge_nodes[indices, 0]],
+                self.alpha[indices, edge_nodes[indices, 1], :],
+            ),
         )
 
     def update_almost_directed_paths(
-        self, indices: torch.Tensor, edge_nodes: torch.Tensor, bidirected: bool = False
+        self,
+        indices: torch.Tensor,
+        edge_nodes: torch.Tensor,
+        is_bidirected: bool = False,
     ):
+        left_edge_nodes = edge_nodes[indices, 0]
+        right_edge_nodes = edge_nodes[indices, 1]
+
         # If there is a directed path from a to x and from y to b, adding a bidirected
         # edge from x to y will create an almost directed path from a to b
         # Similarly, if there is a bidirected path from a to y and from x to b, adding a
         # bidirected edge from x to y will create an almost directed path from a to b
-        if bidirected:
-            self.beta[indices] = torch.maximum(
-                self.beta[indices],
-                self.alpha[indices, edge_nodes[indices, 0], :]
-                @ self.alpha[indices, :, edge_nodes[indices, 1]],
-            )
-            self.beta[indices] = torch.maximum(
-                self.beta[indices],
-                self.alpha[indices, edge_nodes[indices, 1], :]
-                @ self.alpha[indices, :, edge_nodes[indices, 0]],
-            )
-            return
+        if is_bidirected:
+            self.beta[indices, left_edge_nodes, right_edge_nodes] = 1.0
+            self.beta[indices, right_edge_nodes, left_edge_nodes] = 1.0
 
-        # If there is an almost directed path from a to x and a directed path from y to b, adding a
-        # directed edge from x to y will create an almost directed path from a to b
-        self.beta[indices] = torch.maximum(
-            self.beta[indices],
-            self.beta[indices, edge_nodes[indices, 0], :]
-            @ self.alpha[indices, :, edge_nodes[indices, 1]],
-            self.alpha[indices, edge_nodes[indices, 0], :]
-            @ self.beta[indices, :, edge_nodes[indices, 1]],
-        )
+            self.beta[indices] = elementwise_maximum(
+                self.beta[indices],
+                outer_product(
+                    self.alpha[indices, :, left_edge_nodes],
+                    self.alpha[indices, right_edge_nodes, :],
+                ),
+            )
+            self.beta[indices] = elementwise_maximum(
+                self.beta[indices],
+                outer_product(
+                    self.alpha[indices, :, right_edge_nodes],
+                    self.alpha[indices, left_edge_nodes, :],
+                ),
+            )
+        else:
+            # If there is an almost directed path from a to x and a directed path from y to b, adding a
+            # directed edge from x to y will create an almost directed path from a to b
 
-    def mask_added_edges(self, edge_nodes_indices: torch.Tensor):
+            self.beta[indices] = elementwise_maximum(
+                self.beta[indices],
+                outer_product(
+                    self.beta[indices, :, left_edge_nodes],
+                    self.alpha[indices, right_edge_nodes, :],
+                ),
+                outer_product(
+                    self.alpha[indices, :, left_edge_nodes],
+                    self.beta[indices, right_edge_nodes, :],
+                ),
+            )
+
+    def mask_added_edges(
+        self, batch_ids: torch.Tensor, edge_nodes_indices: torch.Tensor
+    ):
         for edge_type in range(self.num_edge_types):
             self.forward_mask[
-                self.batch_ids, self.max_num_edges * edge_type + edge_nodes_indices
+                batch_ids, self.max_num_edges * edge_type + edge_nodes_indices
             ] = 0.0
 
-    def mask_actions_leading_to_cycles(
-        self,
-        left_causes_right_indices: torch.Tensor,
-        right_causes_left_indices: torch.Tensor,
-        latent_confounding_indices: torch.Tensor,
-    ):
-        self.forward_mask[
-            left_causes_right_indices, self.left_causes_right_action_indices
-        ] = (
-            self.forward_mask[
-                left_causes_right_indices, self.left_causes_right_action_indices
-            ]
-            * (1 - self.alpha.transpose(1, 2))
-            * (1 - self.beta.transpose(1, 2))
-        )
-        self.forward_mask[
-            right_causes_left_indices, self.right_causes_left_action_indices
-        ] = (
-            self.forward_mask[
-                right_causes_left_indices, self.right_causes_left_action_indices
-            ]
-            * (1 - self.alpha)
-            * (1 - self.beta)
-        )
-        self.forward_mask[
-            latent_confounding_indices, self.latent_confounding_action_indices
-        ] = (
-            self.forward_mask[
-                latent_confounding_indices, self.latent_confounding_action_indices
-            ]
-            * (1 - self.alpha.transpose(1, 2))
-            * (1 - self.alpha)
-        )
+    def mask_actions_leading_to_cycles(self):
+        left_edge_nodes = self.edges[:, 0]
+        right_edge_nodes = self.edges[:, 1]
+
+        has_directed_path_from_right_to_left = self.alpha[
+            :, right_edge_nodes, left_edge_nodes
+        ]
+        has_almost_directed_path_from_right_to_left = self.beta[
+            :, right_edge_nodes, left_edge_nodes
+        ]
+
+        has_directed_path_from_left_to_right = self.alpha[
+            :, left_edge_nodes, right_edge_nodes
+        ]
+        has_almost_directed_path_from_left_to_right = self.beta[
+            :, left_edge_nodes, right_edge_nodes
+        ]
+
+        self.forward_mask[:, self.left_causes_right_action_indices] *= (
+            1 - has_directed_path_from_right_to_left
+        ) * (1 - has_almost_directed_path_from_right_to_left)
+
+        self.forward_mask[:, self.right_causes_left_action_indices] *= (
+            1 - has_directed_path_from_left_to_right
+        ) * (1 - has_almost_directed_path_from_left_to_right)
+
+        self.forward_mask[:, self.latent_confounding_action_indices] *= (
+            1 - has_directed_path_from_left_to_right
+        ) * (1 - has_directed_path_from_right_to_left)
 
     def remove_backward_mask_from_added_edges(
         self, indices: torch.Tensor, edge_nodes_indices: torch.Tensor
@@ -160,55 +216,63 @@ class MAG_HITL(MAG):
         self.backward_mask[indices, edge_nodes_indices[indices]] = 1.0
 
     def apply(self, indices: torch.Tensor):
-        can_add_edges = self.forward_mask.sum(dim=1) > 0
+        # Indices should be stored as numpy arrays
+        can_add_edges = (self.forward_mask.sum(dim=1) > 0).numpy()
+
+        self.is_initial[:] = 0
+        self.stopped = torch.from_numpy(~can_add_edges)
 
         edge_nodes_indices = indices % self.max_num_edges
         edge_nodes = self.edges[edge_nodes_indices]
 
         # Check the edge type based on the index
         edge_types = indices.numpy() // self.max_num_edges
-        edge_types = [EdgeType(et) for et in edge_types]
+        edge_types = np.array([EdgeType(et) for et in edge_types])
 
-        left_causes_right_indices = np.argwhere(
+        (left_causes_right_indices,) = np.where(
             (edge_types == EdgeType.LEFT_CAUSES_RIGHT) & can_add_edges
         )
-        right_causes_left_indices = np.argwhere(
+        (right_causes_left_indices,) = np.where(
             (edge_types == EdgeType.RIGHT_CAUSES_LEFT) & can_add_edges
         )
-
-        latent_confounding_indices = np.argwhere(
+        (latent_confounding_indices,) = np.where(
             (edge_types == EdgeType.LATENT_CONFOUNDING) & can_add_edges
         )
 
-        self.add_to_edge_list(left_causes_right_indices, edge_nodes)
-        self.add_to_edge_list(right_causes_left_indices, edge_nodes[..., [1, 0]])
-        self.add_to_edge_list(latent_confounding_indices, edge_nodes)
-        self.add_to_edge_list(latent_confounding_indices, edge_nodes[..., [1, 0]])
-
-        self.mask_added_edges(edge_nodes_indices[can_add_edges])
+        self.add_to_edge_list(
+            left_causes_right_indices, edge_nodes, is_bidirected=False
+        )
+        self.add_to_edge_list(
+            right_causes_left_indices, edge_nodes[..., [1, 0]], is_bidirected=False
+        )
+        self.add_to_edge_list(
+            latent_confounding_indices, edge_nodes, is_bidirected=True
+        )
 
         # Recall: self.alpha[batch, x, y] indicates whether there is a directed path from x to y
         # Recall: self.beta[batch, x, y] indicates whether there is an almost directed path from x to y
+
+        self.mask_added_edges(
+            self.batch_ids[can_add_edges], edge_nodes_indices[can_add_edges]
+        )
 
         # Update alpha
         self.update_directed_paths(left_causes_right_indices, edge_nodes)
         self.update_directed_paths(right_causes_left_indices, edge_nodes[..., [1, 0]])
 
         # Update beta
-        self.update_almost_directed_paths(left_causes_right_indices, edge_nodes)
         self.update_almost_directed_paths(
-            right_causes_left_indices, edge_nodes[..., [1, 0]]
+            left_causes_right_indices, edge_nodes, is_bidirected=False
         )
         self.update_almost_directed_paths(
-            latent_confounding_indices, edge_nodes, bidirected=True
+            right_causes_left_indices, edge_nodes[..., [1, 0]], is_bidirected=False
+        )
+        self.update_almost_directed_paths(
+            latent_confounding_indices, edge_nodes, is_bidirected=True
         )
 
         # Mask out all edges that may lead to either directed or almost directed cycles
-        self.mask_actions_leading_to_cycles(
-            left_causes_right_indices,
-            right_causes_left_indices,
-            latent_confounding_indices,
-        )
+        self.mask_actions_leading_to_cycles()
 
         # Remove mask from all backward actions related to the added edges
         self.remove_backward_mask_from_added_edges(
@@ -221,6 +285,8 @@ class MAG_HITL(MAG):
             latent_confounding_indices, edge_nodes_indices
         )
 
+        self.transition_step += 1
+
     def backward(self, indices):
         del indices
         raise NotImplementedError("Backward is not implemented for MAG_HITL")
@@ -229,3 +295,34 @@ class MAG_HITL(MAG):
         # forward_action = num_edges * edge_type + edge_index
         # backward_action = edge_index
         return actions % self.max_num_edges
+
+    @property
+    def adjacency_matrix(self):
+        adj = torch.zeros(
+            (self.batch_size, self.num_nodes, self.num_nodes), device=self.device
+        )
+        adj[self.edge_list[:, 0], self.edge_list[:, 1], self.edge_list[:, 2]] = 1.0
+        return adj
+
+    @property
+    def parents_and_spouses(self):
+        parents = torch.zeros(
+            (self.batch_size, self.num_nodes, self.num_nodes), device=self.device
+        )  # Directed edges
+        spouses = torch.zeros(
+            (self.batch_size, self.num_nodes, self.num_nodes), device=self.device
+        )  # Bidirected edges
+        is_bidirected = self.edge_is_bidirected
+
+        parents[
+            self.edge_list[~is_bidirected, 0],
+            self.edge_list[~is_bidirected, 1],
+            self.edge_list[~is_bidirected, 2],
+        ] = 1.0
+        spouses[
+            self.edge_list[is_bidirected, 0],
+            self.edge_list[is_bidirected, 1],
+            self.edge_list[is_bidirected, 2],
+        ] = 1.0
+
+        return parents, spouses
