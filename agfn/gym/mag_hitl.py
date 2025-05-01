@@ -29,13 +29,6 @@ class MAG_HITL(MAG):
             (0,), dtype=torch.bool, device=self.device
         )
 
-        self.forward_mask = torch.ones(
-            (self.batch_size, self.actions.shape[0]), device=self.device
-        )
-        self.backward_mask = torch.zeros(
-            (self.batch_size, self.max_num_edges), device=self.device
-        )
-
         # Remove unused attributes
         del self.indices, self.edge_degree
 
@@ -71,8 +64,13 @@ class MAG_HITL(MAG):
         )
 
         # A backward action corresponds to removing an edge
-        self.backward_mask = torch.zeros(
-            (self.batch_size, self.max_num_edges), device=self.device
+        self.backward_mask = torch.zeros_like(self.forward_mask)
+
+        # A state has been modified if an edge has been added or removed
+        # (We use numpy arrays for indexing since it works better with
+        # Python non-native types, e.g., EdgeType)
+        self.state_has_been_modified = np.zeros(
+            (self.batch_size,), dtype=bool, device=self.device
         )
 
     def add_to_edge_list(
@@ -210,11 +208,6 @@ class MAG_HITL(MAG):
             1 - has_directed_path_from_left_to_right
         ) * (1 - has_directed_path_from_right_to_left)
 
-    def remove_backward_mask_from_added_edges(
-        self, indices: torch.Tensor, edge_nodes_indices: torch.Tensor
-    ):
-        self.backward_mask[indices, edge_nodes_indices[indices]] = 1.0
-
     def apply(self, indices: torch.Tensor):
         # Indices should be stored as numpy arrays
         can_add_edges = (self.forward_mask.sum(dim=1) > 0).numpy()
@@ -275,15 +268,9 @@ class MAG_HITL(MAG):
         self.mask_actions_leading_to_cycles()
 
         # Remove mask from all backward actions related to the added edges
-        self.remove_backward_mask_from_added_edges(
-            left_causes_right_indices, edge_nodes_indices
-        )
-        self.remove_backward_mask_from_added_edges(
-            right_causes_left_indices, edge_nodes_indices
-        )
-        self.remove_backward_mask_from_added_edges(
-            latent_confounding_indices, edge_nodes_indices
-        )
+        self.backward_mask[self.batch_ids[can_add_edges], indices[can_add_edges]] = 1.0
+
+        self.state_has_been_modified = can_add_edges
 
         self.transition_step += 1
 

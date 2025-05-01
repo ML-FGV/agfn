@@ -69,13 +69,10 @@ class BackwardPolicy(nn.Module):
         uniform_pol = torch.where(mask == 1.0, 1.0, self.masked_value)
         uniform_pol = torch.softmax(uniform_pol, dim=-1)
 
-        if actions is not None:
-            actions = batch_state.f2b(actions)
-        else:
+        if actions is None:
             actions = torch.multinomial(uniform_pol, num_samples=1, replacement=True)
             actions = actions.squeeze(dim=-1)
 
         pol = uniform_pol[batch_state.batch_ids, actions]
-        print(actions[pol == 0.0], mask[pol == 0.0])
 
         return actions, torch.log(pol)

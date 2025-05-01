@@ -35,18 +35,11 @@ class GFlowNet(nn.Module):
         match self.criterion:
             case "tb":
                 loss = self._trajectory_balance(batch_state)
-            case "cb":
-                loss = self._contrastive_balance(batch_state)
-            case "cbf":
-                loss = self._contrastive_balance_full(batch_state)
-            case "db":
-                loss = self._detailed_balance(batch_state)
-            case "subtb":
-                loss = self._subtrajectory_balance(batch_state)
             case _:
                 raise ValueError(
                     f"{self.criterion} should be either tb, cb, db, or dbc"
                 )
+
         return loss
 
     def _sample_traj(self, batch_state):
@@ -67,6 +60,12 @@ class GFlowNet(nn.Module):
         is_stopped = torch.zeros(
             (batch_state.batch_size,), dtype=bool, device=self.device
         )
+
+        trajectory_mask = torch.zeros(
+            (batch_state.batch_size, batch_state.max_trajectory_length),
+            device=self.device,
+        )
+
         while not is_stopped.all():
             # Sample the actions
             out = self.pf(batch_state)
@@ -78,73 +77,33 @@ class GFlowNet(nn.Module):
             # Corresponding backward actions
             out = self.pb(batch_state, actions)
             pb = out[1]
-            assert not torch.isinf(pb).any()
 
             # Save values
             traj_stats[0, ~is_stopped, i] = pf[~is_stopped]
             traj_stats[1, ~is_stopped, i] = pb[~is_stopped]
 
             F_traj[~is_stopped, i] = F[~is_stopped]
+
+            trajectory_mask[batch_state.state_has_been_modified, i] = 1
+
             # Check whether it already stopped
             is_stopped = batch_state.stopped
             i += 1
             last_idx += 1 - is_stopped.long()
 
         F_traj[batch_state.batch_ids, last_idx + 1] = batch_state.log_reward()
-        return traj_stats, F_traj, last_idx + 1
+        return traj_stats, F_traj, last_idx + 1, trajectory_mask
 
     def _trajectory_balance(self, batch_state):
-        traj_stats, F_traj, last_idx = self._sample_traj(batch_state)
+        traj_stats, F_traj, last_idx, trajectory_mask = self._sample_traj(batch_state)
+        pf_minus_pb = torch.where(
+            trajectory_mask == 1, traj_stats[0] - traj_stats[1], 0.0
+        )
         loss = (
-            (traj_stats[0] - traj_stats[1]).sum(dim=1)
+            pf_minus_pb.sum(dim=1)
             - F_traj[batch_state.batch_ids, last_idx]
             + self.log_z
         )
-        return (loss * loss).mean()
-
-    def _detailed_balance(self, batch_state):
-        traj_stats, F_traj, _ = self._sample_traj(batch_state)
-        loss = traj_stats[0] + F_traj[:, :-1] - traj_stats[1] - F_traj[:, 1:]
-        return (loss * loss).mean()
-
-    def _subtrajectory_balance(self, batch_state):
-        traj_stats, F_traj, _ = self._sample_traj(batch_state)
-        max_traj_length = batch_state.max_trajectory_length
-        i, j = torch.triu_indices(
-            max_traj_length + 1, max_traj_length + 1, offset=1, device=self.device
-        )
-
-        traj_stats = torch.cumsum(traj_stats, dim=-1)
-        traj_stats = torch.cat(
-            [torch.zeros((*traj_stats.shape, 1), device=self.device), traj_stats],
-            dim=-1,
-        )
-        pf = traj_stats[0, :, j] - traj_stats[0, :, i]
-        pb = traj_stats[1, :, j] - traj_stats[1, :, i]
-        loss = pf - pb + F_traj[:, i] - F_traj[:, j]
-        lamb = 0.9 ** (j - i).view(1, -1)
-        loss = ((loss * loss) * lamb).sum(dim=1) / lamb.sum()
-        loss = self._remove_unlikely_states(batch_state, loss)
-        return loss.mean()
-
-    def _contrastive_balance_full(self, batch_state):
-        traj_stats, F_traj, last_idx = self._sample_traj(batch_state)
-        loss = (traj_stats[0] - traj_stats[1]).sum(dim=1) - F_traj[
-            batch_state.batch_ids, last_idx
-        ]
-        loss = self._remove_unlikely_states(batch_state, loss)
-        loss = (loss[:, None] - loss[None, :]) ** 2
-        return loss.mean()
-
-    def _contrastive_balance(self, batch_state):
-        assert (batch_state.batch_size % 2) == 0, "batch size must be even"
-        half_batch = batch_state.batch_size // 2
-        traj_stats, F_traj, last_idx = self._sample_traj(batch_state)
-        loss = (traj_stats[0] - traj_stats[1]).sum(dim=1) - F_traj[
-            batch_state.batch_ids, last_idx
-        ]
-        loss = self._remove_unlikely_states(batch_state, loss)
-        loss = loss[:half_batch] - loss[half_batch:]
         return (loss * loss).mean()
 
     @torch.no_grad()
