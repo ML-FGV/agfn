@@ -16,21 +16,26 @@ def posterior_from_responses(
     pi: float = 0.95,
 ):
     indices = torch.arange(4).unsqueeze(0).repeat(num_node_pairs, 1)
+    queries = torch.tensor(queries, dtype=torch.long)
     responses = torch.tensor(responses).unsqueeze(1)
 
-    prior = torch.ones((num_node_pairs, 4)) / 4
-    posterior = prior.clone()
+    log_prior = torch.ones((num_node_pairs, 4)) / 4
+    log_posterior = log_prior.clone()
 
-    posterior[queries] = prior[queries] * pi * (indices[queries] == responses) + (
-        1 - pi
-    ) * (indices[queries] != responses) * (1 / 3)
+    log_likelihood = torch.log(
+        pi * (indices[queries] == responses)
+        + (1 - pi) * (indices[queries] != responses) * (1 / 3),
+    )
 
+    log_posterior.index_add_(0, queries, log_likelihood)
+
+    posterior = torch.exp(log_posterior)
     posterior = posterior / posterior.sum(dim=1, keepdim=True)
 
     return posterior
 
 
-def find_next_query(
+def find_next_query_from_reward_cross_entropy(
     gfn: GFlowNet,
     log_reward: LogReward,
     queries: list,
@@ -83,6 +88,28 @@ def find_next_query(
 
     # Returns the index of the highest-uncertainty edge to query
     return best_edge_to_query
+
+
+def find_next_query_from_entropy(
+    queries: list,
+    responses: list,
+    num_nodes: int,
+    pi: float = 0.95,
+) -> int:
+    posterior = posterior_from_responses(
+        responses=responses,
+        queries=queries,
+        num_node_pairs=num_nodes * (num_nodes - 1) // 2,
+        pi=pi,
+    )
+
+    entropy = -(posterior * torch.log(posterior)).sum(dim=1)
+    return entropy.argmax().item()
+
+
+def find_next_query_randomly(num_nodes: int) -> int:
+    num_edges = num_nodes * (num_nodes - 1) // 2
+    return np.random.choice(num_edges)
 
 
 def get_response_from_oracle(query: int, adj: torch.Tensor) -> EdgeType:
