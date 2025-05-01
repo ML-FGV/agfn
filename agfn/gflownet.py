@@ -35,6 +35,8 @@ class GFlowNet(nn.Module):
         match self.criterion:
             case "tb":
                 loss = self._trajectory_balance(batch_state)
+            case "cb":
+                loss = self._contrastive_balance(batch_state)
             case _:
                 raise ValueError(
                     f"{self.criterion} should be either tb, cb, db, or dbc"
@@ -105,6 +107,14 @@ class GFlowNet(nn.Module):
             + self.log_z
         )
         return (loss * loss).mean()
+
+    def _contrastive_balance(self, batch_state):
+        traj_stats, F_traj, last_idx, trajectory_mask = self._sample_traj(batch_state)
+        pf_minus_pb = torch.where(
+            trajectory_mask == 1, traj_stats[0] - traj_stats[1], 0.0
+        )
+        loss = pf_minus_pb.sum(dim=1) - F_traj[batch_state.batch_ids, last_idx]
+        return loss.var()
 
     @torch.no_grad()
     def sample(self, batch_state):

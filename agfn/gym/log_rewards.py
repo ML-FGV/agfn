@@ -100,7 +100,9 @@ class LogRewardSlightlyComplex(nn.Module):
         )
 
     def forward(self, batch_state, *args):
-        D, B = batch_state.directed_amat, batch_state.bidirected_amat
+        A = batch_state.adjacency_matrix
+        D = torch.where(A != A.transpose(1, 2), A, torch.zeros_like(A))
+        B = torch.where(A == A.transpose(1, 2), A, torch.zeros_like(A))
         return (self.d_w * D).sum(dim=(1, 2)) + (self.b_w * B).sum(dim=(1, 2))
 
 

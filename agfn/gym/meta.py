@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 
 from abc import ABCMeta, abstractmethod
+from copy import deepcopy
 
 
 class Environment(metaclass=ABCMeta):
@@ -43,3 +44,6 @@ class Environment(metaclass=ABCMeta):
     @property
     def unique_input(self):
         raise NotImplementedError
+
+    def copy(self):
+        return deepcopy(self)

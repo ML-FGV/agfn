@@ -1,22 +1,24 @@
 import torch
 import numpy as np
+import itertools
+
 from typing import Optional
 
 from agfn.commons import EdgeType
-from agfn.gym.gym import MAG, LogReward
+from agfn.gym import MAG_HITL, LogReward
 from agfn.gflownet import GFlowNet
 
 
-def posterior_update(
+def posterior_from_responses(
     responses: list,
     queries: list,
-    num_edges: int,
+    num_node_pairs: int,
     pi: float = 0.95,
 ):
-    indices = torch.arange(4).unsqueeze(0).repeat(num_edges, 1)
+    indices = torch.arange(4).unsqueeze(0).repeat(num_node_pairs, 1)
     responses = torch.tensor(responses).unsqueeze(1)
 
-    prior = torch.ones((num_edges, 4)) / 4
+    prior = torch.ones((num_node_pairs, 4)) / 4
     posterior = prior.clone()
 
     posterior[queries] = prior[queries] * pi * (indices[queries] == responses) + (
@@ -33,18 +35,18 @@ def find_next_query(
     log_reward: LogReward,
     queries: list,
     responses: list,
+    num_nodes: int,
     mask_queried_edges: bool = True,
     pi: float = 0.95,
-    initial_state: Optional[MAG] = None,
+    initial_state: Optional[MAG_HITL] = None,
     num_iterations: int = 25,
 ):
     if initial_state is None:
-        num_nodes = log_reward.dataset.shape[1]
-        initial_state = MAG(num_nodes, batch_size=128, log_reward=log_reward)
+        initial_state = MAG_HITL(num_nodes, batch_size=128, log_reward=log_reward)
 
-    num_edges = (num_nodes * (num_nodes - 1)) // 2
+    num_node_pairs = (num_nodes * (num_nodes - 1)) // 2
 
-    edge_indices = np.arange(num_edges)
+    edge_indices = np.arange(num_node_pairs)
     if mask_queried_edges:
         edge_indices = np.setdiff1d(edge_indices, queries)
 
@@ -61,7 +63,9 @@ def find_next_query(
             queries_cp.append(edge_idx)
             responses_cp.append(response.value)
 
-            posterior_dist = posterior_update(responses_cp, queries_cp, num_edges, pi)
+            posterior_dist = posterior_from_responses(
+                responses_cp, queries_cp, num_node_pairs, pi
+            )
 
             gfn.set_posterior(posterior_dist)
 
@@ -93,3 +97,45 @@ def get_response_from_oracle(query: int, adj: torch.Tensor) -> EdgeType:
         return EdgeType.RIGHT_CAUSES_LEFT
     else:
         return EdgeType.NO_RELATIONSHIP
+
+
+def log_score_from_responses(
+    states: MAG_HITL, queries: list, responses: list
+) -> torch.Tensor:
+    # log_reward + log_posterior (mean-field approximation)
+    posterior_dist = posterior_from_responses(
+        queries=queries, responses=responses, num_node_pairs=states.max_num_edges
+    )
+    log_scores = states.log_reward()
+
+    adj = states.adjacency_matrix
+
+    # For each edge, find the corresponding posterior distribution
+    for i, j in itertools.combinations(range(states.num_nodes), 2):
+        # Find the edge type for each graph in the batch
+        left_causes_right = (adj[:, i, j] == 1) & (adj[:, j, i] == 0)
+        right_causes_left = (adj[:, i, j] == 0) & (adj[:, j, i] == 1)
+        latent_confounding = (adj[:, i, j] == 1) & (adj[:, j, i] == 1)
+        no_relation = (adj[:, i, j] == 0) & (adj[:, j, i] == 0)
+
+        # Edges are lexicographically ordered. Find the index of (i, j).
+        idx = i * (states.num_nodes - 2) + j - 1 - (i**2 - i) // 2
+
+        # Update the score according to the (expert-induced) posterior distribution
+        log_scores[left_causes_right] += torch.log(
+            posterior_dist[idx, EdgeType.LEFT_CAUSES_RIGHT.value]
+        )
+
+        log_scores[right_causes_left] += torch.log(
+            posterior_dist[idx, EdgeType.RIGHT_CAUSES_LEFT.value]
+        )
+
+        log_scores[latent_confounding] += torch.log(
+            posterior_dist[idx, EdgeType.LATENT_CONFOUNDING.value]
+        )
+
+        log_scores[no_relation] += torch.log(
+            posterior_dist[idx, EdgeType.NO_RELATIONSHIP.value]
+        )
+
+    return log_scores
