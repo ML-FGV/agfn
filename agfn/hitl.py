@@ -100,13 +100,13 @@ def get_response_from_oracle(query: int, adj: torch.Tensor) -> EdgeType:
 
 
 def log_score_from_responses(
-    states: MAG_HITL, queries: list, responses: list
+    states: MAG_HITL, queries: list, responses: list, log_reward_coef: float = 0.5
 ) -> torch.Tensor:
     # log_reward + log_posterior (mean-field approximation)
-    posterior_dist = posterior_from_responses(
+    log_posterior_dist = (1 - log_reward_coef) * posterior_from_responses(
         queries=queries, responses=responses, num_node_pairs=states.max_num_edges
-    )
-    log_scores = states.log_reward()
+    ).log()
+    log_scores = log_reward_coef * states.log_reward()
 
     adj = states.adjacency_matrix
 
@@ -122,20 +122,20 @@ def log_score_from_responses(
         idx = i * (states.num_nodes - 2) + j - 1 - (i**2 - i) // 2
 
         # Update the score according to the (expert-induced) posterior distribution
-        log_scores[left_causes_right] += torch.log(
-            posterior_dist[idx, EdgeType.LEFT_CAUSES_RIGHT.value]
-        )
+        log_scores[left_causes_right] += log_posterior_dist[
+            idx, EdgeType.LEFT_CAUSES_RIGHT.value
+        ]
 
-        log_scores[right_causes_left] += torch.log(
-            posterior_dist[idx, EdgeType.RIGHT_CAUSES_LEFT.value]
-        )
+        log_scores[right_causes_left] += log_posterior_dist[
+            idx, EdgeType.RIGHT_CAUSES_LEFT.value
+        ]
 
-        log_scores[latent_confounding] += torch.log(
-            posterior_dist[idx, EdgeType.LATENT_CONFOUNDING.value]
-        )
+        log_scores[latent_confounding] += log_posterior_dist[
+            idx, EdgeType.LATENT_CONFOUNDING.value
+        ]
 
-        log_scores[no_relation] += torch.log(
-            posterior_dist[idx, EdgeType.NO_RELATIONSHIP.value]
-        )
+        log_scores[no_relation] += log_posterior_dist[
+            idx, EdgeType.NO_RELATIONSHIP.value
+        ]
 
     return log_scores
