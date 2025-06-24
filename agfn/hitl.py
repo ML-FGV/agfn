@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import pandas as pd
 import itertools
 
 from typing import Optional
@@ -7,7 +8,6 @@ from typing import Optional
 from agfn.commons import EdgeType
 from agfn.gym import MAG_HITL, LogReward
 from agfn.gflownet import GFlowNet
-
 
 def posterior_from_responses(
     responses: list,
@@ -26,6 +26,7 @@ def posterior_from_responses(
         pi * (indices[queries] == responses)
         + (1 - pi) * (indices[queries] != responses) * (1 / 3),
     )
+    print('responses: {}'.format(responses))
 
     log_posterior.index_add_(0, queries, log_likelihood)
 
@@ -105,7 +106,50 @@ def find_next_query_from_entropy(
 
     entropy = -(posterior * torch.log(posterior)).sum(dim=1)
     return entropy.argmax().item()
+    
+def posterior_from_responses_pi_list(
+    responses: list,
+    queries: list,
+    num_node_pairs: int,
+    pis: list,
+):
+    indices = torch.arange(4).unsqueeze(0).repeat(num_node_pairs, 1)
+    queries = torch.tensor(queries, dtype=torch.long)
+    pis = torch.tensor(pis, dtype=torch.long).unsqueeze(0).T
 
+    responses = torch.tensor(responses).unsqueeze(1)
+
+    log_prior = torch.ones((num_node_pairs, 4)) / 4
+    log_posterior = log_prior.clone()
+
+    
+    log_likelihood = torch.log(
+        pis * (indices[queries] == responses)
+        + (1 - pis) * (indices[queries] != responses) * (1 / 3),
+    )
+    
+    log_posterior.index_add_(0, queries, log_likelihood)
+
+    posterior = torch.exp(log_posterior)
+    posterior = posterior / posterior.sum(dim=1, keepdim=True)
+
+    return posterior
+
+def find_next_query_from_entropy_pi_list(
+    queries: list,
+    responses: list,
+    num_nodes: int,
+    pis: list,
+) -> int:
+    posterior = posterior_from_responses_pi_list(
+        responses=responses,
+        queries=queries,
+        num_node_pairs=num_nodes * (num_nodes - 1) // 2,
+        pis=pis,
+    )
+
+    entropy = -(posterior * torch.log(posterior)).sum(dim=1)
+    return entropy.argmax().item()
 
 def find_next_query_randomly(num_nodes: int) -> int:
     num_edges = num_nodes * (num_nodes - 1) // 2
@@ -124,7 +168,6 @@ def get_response_from_oracle(query: int, adj: torch.Tensor) -> EdgeType:
         return EdgeType.RIGHT_CAUSES_LEFT
     else:
         return EdgeType.NO_RELATIONSHIP
-
 
 def log_score_from_responses(
     states: MAG_HITL, queries: list, responses: list, log_reward_coef: float = 0.5
@@ -166,3 +209,39 @@ def log_score_from_responses(
         ]
 
     return log_scores
+
+import pandas as pd 
+from agfn.commons import EdgeType
+
+
+def str_to_list(string):
+    s = string.split()
+    s[0] = s[0][1:]
+    if len(s) == 5:
+        s = s[:-1]
+    else:
+        s[len(s)-1] = s[len(s)-1][:-1]
+    l = []
+    
+    for i in range(len(s)):
+        l.append(float(s[i]))
+    return l
+
+def get_response_from_LLM_oracle(query: int, responses: pd.DataFrame) -> tuple[EdgeType, float]: #returns edge type and its uncertainty
+    
+    edge_probs = np.array(str_to_list(responses.iloc[query,2].strip()))
+    pi = edge_probs.max()
+
+    if pi == 1:
+        pi = 0.95
+    
+    edge = edge_probs.argmax()
+
+    if edge == 0:
+        return EdgeType.NO_RELATIONSHIP, pi
+    if edge == 1:
+        return EdgeType.LEFT_CAUSES_RIGHT, pi
+    if edge == 2:
+        return EdgeType.RIGHT_CAUSES_LEFT, pi
+    if edge == 3:
+        return EdgeType.LATENT_CONFOUNDING, pi
