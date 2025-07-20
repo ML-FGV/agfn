@@ -5,6 +5,7 @@ description = "AGFN"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "dspy>=2.6.27",
     "ipykernel>=6.29.5",
     "matplotlib>=3.10.1",
     "numpy>=2.2.5",
