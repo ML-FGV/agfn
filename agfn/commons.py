@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 
 from enum import Enum
 
@@ -28,3 +29,7 @@ def is_mag(directed_adj, bidirected_adj, return_th=False):
     if return_th:
         return torch.abs(th) < 1e-8, th
     return torch.abs(th) < 1e-8
+
+
+def topk_numpy(array: np.ndarray, k: int) -> np.ndarray:
+    return np.argpartition(array, -k)[-k:]

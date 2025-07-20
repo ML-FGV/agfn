@@ -13,8 +13,8 @@ from agfn.modules.expert import Expert
 
 
 class ElicitationStrategy(Enum):
-    REWARD_CROSS_ENTROPY = "reward_cross_entropy"
-    ENTROPY = "entropy"
+    LARGEST_CROSS_ENTROPY = "largest_cross_entropy"
+    LARGEST_ENTROPY = "largest_entropy"
     RANDOM = "random"
 
 
@@ -38,6 +38,9 @@ class AGFN:
         self.responses = []
         self.pis = []
 
+    def create_initial_state(self, batch_size: int = 256) -> MAG_HITL:
+        return MAG_HITL(self.expert.num_nodes, batch_size, self.log_reward)
+
     def train(
         self,
         num_epochs: int = 125,
@@ -46,7 +49,7 @@ class AGFN:
         lr_logz: float = 1e-1,
         progress_bar: bool = True,
     ) -> list[float]:
-        self.gflownet.train()
+        self.train_mode()
         opt = torch.optim.Adam(
             [
                 {"params": self.gflownet.pf.parameters(), "lr": lr},
@@ -61,7 +64,7 @@ class AGFN:
         pbar = tqdm.tqdm(range(num_epochs), disable=not progress_bar)
 
         for _ in pbar:
-            initial_state = MAG_HITL(self.expert.num_nodes, batch_size, self.log_reward)
+            initial_state = self.create_initial_state(batch_size)
             opt.zero_grad()
             loss = self.gflownet(initial_state)
             loss.backward()
@@ -74,25 +77,36 @@ class AGFN:
 
         return log_z_values
 
+    def eval_mode(self):
+        self.gflownet.eval()
+
+    def train_mode(self):
+        self.gflownet.train()
+
     def sample(
         self,
         num_samples: int = 100,
         batch_size: int = 256,
         progress_bar: bool = True,
+        log_reward_coef: float = 0.5,
     ) -> tuple[np.ndarray, np.ndarray]:
         graphs = []
-        log_rewards = []
+        log_scores = []
 
         for _ in tqdm.trange(num_samples, disable=not progress_bar):
-            initial_state = MAG_HITL(self.expert.num_nodes, batch_size, self.log_reward)
+            initial_state = self.create_initial_state(batch_size)
             state = self.gflownet.sample(initial_state)
+            log_score_samples = (
+                self.log_score_from_responses(state, log_reward_coef).cpu().numpy()
+            )
+
             graphs.append(state.adjacency_matrix.cpu().numpy())
-            log_rewards.append(state.log_reward().cpu().numpy())
+            log_scores.append(log_score_samples)
 
         graphs = np.concatenate(graphs, axis=0)
-        log_rewards = np.concatenate(log_rewards, axis=0)
+        log_scores = np.concatenate(log_scores, axis=0)
 
-        return graphs, log_rewards
+        return graphs, log_scores
 
     def posterior_from_responses(self):
         indices = torch.arange(4).unsqueeze(0).repeat(self.expert.num_node_pairs, 1)
@@ -122,11 +136,7 @@ class AGFN:
         num_iterations: int = 25,
     ) -> int:
         if initial_state is None:
-            initial_state = MAG_HITL(
-                self.expert.num_nodes,
-                batch_size=128,
-                log_reward=self.log_reward,
-            )
+            initial_state = self.create_initial_state(batch_size=128)
 
         edge_indices = np.arange(self.expert.num_node_pairs)
         if mask_queried_edges:
@@ -184,11 +194,11 @@ class AGFN:
         prior_pi: float = 0.95,
     ):
         match self.strategy:
-            case ElicitationStrategy.REWARD_CROSS_ENTROPY:
+            case ElicitationStrategy.LARGEST_CROSS_ENTROPY:
                 return self.find_next_query_from_reward_cross_entropy(
                     mask_queried_edges, initial_state, num_iterations, prior_pi
                 )
-            case ElicitationStrategy.ENTROPY:
+            case ElicitationStrategy.LARGEST_ENTROPY:
                 return self.find_next_query_from_entropy()
             case ElicitationStrategy.RANDOM:
                 return self.find_next_query_randomly()
@@ -233,3 +243,39 @@ class AGFN:
             ]
 
         return log_scores
+
+    def temperature_warmup(self, batch_size: int = 128, iterations: int = 8):
+        self.log_reward.warmup(
+            self.gflownet, self.create_initial_state(batch_size), iterations
+        )
+
+    def feedback_loop(
+        self,
+        num_feedbacks: int = None,
+        expert_returns_confidence: bool = False,
+        progress_bar: bool = True,
+    ):
+        initial_state = self.create_initial_state(batch_size=256)
+
+        if num_feedbacks is None:
+            num_feedbacks = initial_state.max_num_edges
+
+        for _ in tqdm.trange(num_feedbacks, disable=not progress_bar):
+            query = self.find_next_query(
+                mask_queried_edges=True,
+                initial_state=initial_state,
+                num_iterations=25,
+                prior_pi=1 - 1e-3,
+            )
+
+            if expert_returns_confidence:
+                response, confidence = self.expert.get_feedback_with_confidence(query)
+            else:
+                response = self.expert.get_feedback(query)
+                confidence = self.prior_pi
+
+            self.queries.append(query)
+            self.responses.append(response.value)
+            self.pis.append(confidence)
+
+            self.gflownet.set_posterior(self.posterior_from_responses())

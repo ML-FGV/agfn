@@ -7,12 +7,16 @@ from agfn.gym import LogReward
 
 
 def create_gflownet(
-    num_nodes: int, hidden_dim: int, num_layers: int, device: str = "cpu"
+    num_nodes: int,
+    hidden_dim: int,
+    num_layers: int,
+    criterion: str = "cb",
+    device: str = "cpu",
 ) -> GFlowNet:
     pf = ForwardPolicyHITL(num_nodes, hidden_dim, num_layers, device=device)
     pb = BackwardPolicyHITL(device=device)
 
-    gfn = GFlowNet(pf, pb, criterion="cb", device=device)
+    gfn = GFlowNet(pf, pb, criterion=criterion, device=device)
 
     return gfn
 
@@ -36,4 +40,4 @@ def create_agfn(
     expert = create_expert(expert_type, **expert_kwargs)
     gflownet = create_gflownet(expert.num_nodes, **gflownet_kwargs)
 
-    return AGFN(expert, gflownet, strategy, log_reward, prior_pi)
+    return AGFN(gflownet, expert, strategy, log_reward, prior_pi)
