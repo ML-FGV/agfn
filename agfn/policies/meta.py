@@ -33,11 +33,13 @@ class ForwardPolicyMeta(nn.Module, metaclass=ABCMeta):
             uniform_pol = torch.where(
                 torch.isclose(mask, torch.ones_like(mask)), 1.0, self.masked_value
             )
-        uniform_pol = torch.softmax(uniform_pol, dim=-1)
-        eps = 0.0 if not self.training else self.eps
-        exp_pol = pol * (1 - eps) + eps * uniform_pol
-        actions = torch.multinomial(exp_pol, num_samples=1, replacement=True)
+        if self.training:
+            uniform_pol = torch.softmax(uniform_pol, dim=-1)
+            pol = pol * (1 - self.eps) + self.eps * uniform_pol
+
+        actions = torch.multinomial(pol, num_samples=1, replacement=True)
         actions = actions.squeeze(dim=-1)
+
         return actions
 
     def forward(self, batch_state: Union[MAG, MAG_HITL], actions=None):

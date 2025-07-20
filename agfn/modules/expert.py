@@ -30,17 +30,23 @@ class FeedbackWithoutConfidenceSignature(dspy.Signature):
     )
 
     relationship: EdgeType = dspy.OutputField(
-        description="This is the feedback. It describes the nature of the relationship between the input nodes."
+        description=(
+            "This is the feedback. It describes the nature of the relationship between the input nodes. "
+            "This information should be inferred from the provided context, background knowledge, and the nature of the problem."
+        )
     )
 
 
 class FeedbackWithConfidenceSignature(FeedbackWithoutConfidenceSignature):
     confidence: float = dspy.OutputField(
-        description="This is the confidence factor for the feedback. It is a value between 0 and 1."
+        ge=0.05,
+        le=0.95,
+        multiple_of=0.05,
+        description="This is the confidence factor for the feedback. It is a value between 0.05 and 0.95.",
     )
 
 
-class OutputField(NamedTuple):
+class LLMOutputField(NamedTuple):
     relationship: EdgeType
     confidence: float
 
@@ -88,17 +94,24 @@ class Oracle(Expert):
 
 
 class LLMOracle(Expert):
-    def __init__(self, num_nodes: int, adj: torch.Tensor, llm_name: str):
+    def __init__(
+        self,
+        num_nodes: int,
+        adj: torch.Tensor,
+        llm_name: str = "ollama_chat/llama3.2",
+        api_base: str = "http://localhost:11434",
+        api_key: str = "",
+    ):
         super().__init__(num_nodes)
 
         self.adj = adj
 
         # Set the default language model for dspy.
-        self.lm = dspy.LM(llm_name)
+        self.lm = dspy.LM(llm_name, temperature=0.1, api_base=api_base, api_key=api_key)
         dspy.configure(lm=self.lm)
 
         # Create the LLM agent.
-        self.llm = dspy.ReAct(FeedbackWithConfidenceSignature)
+        self.llm = dspy.ChainOfThought(FeedbackWithConfidenceSignature)
 
     def _get_prompt_context(self, i: int, j: int) -> str:
         if self.adj[i, j] == 1 and self.adj[j, i] == 1:
@@ -111,14 +124,12 @@ class LLMOracle(Expert):
             relationship = f"We know that node {i} and node {j} are not associated."
 
         return (
-            "You are an expert in the domain of the problem. "
-            "You are given a pair of nodes and a context. "
-            "You need to return the nature of the relationship between the input nodes. "
-            f"The pair of nodes is: {i} and {j}. "
+            "You are given a pair of nodes and a context. \n"
+            "You need to return the nature of the relationship between the input nodes. \n"
             f"{relationship}"
         )
 
-    def _query_llm(self, query: tuple[str, str]) -> OutputField:
+    def _query_llm(self, query: tuple[str, str]) -> LLMOutputField:
         i, j = self.node_pairs[query]
         context = self._get_prompt_context(i, j)
         return self.llm(context=context, query=(i, j))

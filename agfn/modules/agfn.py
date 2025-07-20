@@ -179,7 +179,7 @@ class AGFN:
     def find_next_query_from_entropy(self) -> int:
         posterior = self.posterior_from_responses()
 
-        entropy = -(posterior * torch.log(posterior)).sum(dim=1)
+        entropy = -(posterior * torch.log(posterior + 1e-20)).sum(dim=1)
         return entropy.argmax().item()
 
     def find_next_query_randomly(self) -> int:
@@ -248,6 +248,11 @@ class AGFN:
         self.log_reward.warmup(
             self.gflownet, self.create_initial_state(batch_size), iterations
         )
+
+    def reset_queries(self):
+        self.queries = []
+        self.responses = []
+        self.pis = []
 
     def feedback_loop(
         self,

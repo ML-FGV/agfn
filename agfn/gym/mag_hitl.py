@@ -110,16 +110,19 @@ class MAG_HITL(MAG):
             )
 
     def update_directed_paths(self, indices: torch.Tensor, edge_nodes: torch.Tensor):
+        left_edge_nodes = edge_nodes[indices, 0]
+        right_edge_nodes = edge_nodes[indices, 1]
+
         # Marks x -> y as a directed path
-        self.alpha[indices, edge_nodes[indices, 0], edge_nodes[indices, 1]] = 1.0
+        self.alpha[indices, left_edge_nodes, right_edge_nodes] = 1.0
 
         # For each (a, b), if there is a path a -> x and y -> b, then there is a path a -> x -> y -> b
         # when the edge x -> y is appended to the graph
         self.alpha[indices] = elementwise_maximum(
             self.alpha[indices],
             outer_product(
-                self.alpha[indices, :, edge_nodes[indices, 0]],
-                self.alpha[indices, edge_nodes[indices, 1], :],
+                self.alpha[indices, :, left_edge_nodes],
+                self.alpha[indices, right_edge_nodes, :],
             ),
         )
 
