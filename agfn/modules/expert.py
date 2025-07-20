@@ -46,6 +46,8 @@ class Expert(ABC):
             num_nodes, num_nodes, offset=1
         )  # (num_node_pairs, 2)
 
+        self.num_node_pairs = len(self.node_pairs)
+
     @abstractmethod
     def get_feedback_with_confidence(self, query) -> tuple[EdgeType, float]:
         pass

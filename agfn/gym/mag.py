@@ -106,7 +106,7 @@ class MAG(Environment):
         return amat
 
     @torch.no_grad()
-    def log_reward(self):
+    def log_reward(self) -> torch.Tensor:
         return self._log_reward(self)
 
     @property
