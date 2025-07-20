@@ -121,15 +121,16 @@ def find_next_query_randomly(num_nodes: int) -> int:
 
 def find_next_query(
     strategy: ElicitationStrategy,
-    gfn: GFlowNet,
-    log_reward: LogReward,
     queries: list,
     responses: list,
-    pis: list,
     num_nodes: int,
+    pis: list = None,
+    gfn: GFlowNet = None,
+    log_reward: LogReward = None,
     mask_queried_edges: bool = True,
     initial_state: Optional[MAG_HITL] = None,
     num_iterations: int = 25,
+    prior_pi: float = 0.95,
 ):
     match strategy:
         case ElicitationStrategy.REWARD_CROSS_ENTROPY:
@@ -143,6 +144,7 @@ def find_next_query(
                 mask_queried_edges,
                 initial_state,
                 num_iterations,
+                prior_pi,
             )
         case ElicitationStrategy.ENTROPY:
             return find_next_query_from_entropy(queries, responses, pis, num_nodes)
