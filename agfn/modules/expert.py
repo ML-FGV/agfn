@@ -3,8 +3,14 @@ import torch
 
 from abc import ABC, abstractmethod
 from typing import NamedTuple
+from enum import Enum
 
-from agfn.hitl import EdgeType
+from agfn.commons import EdgeType
+
+
+class ExpertType(Enum):
+    ORACLE = "oracle"
+    LLM_ORACLE = "llm_oracle"
 
 
 class FeedbackWithoutConfidenceSignature(dspy.Signature):
