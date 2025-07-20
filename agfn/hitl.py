@@ -7,7 +7,7 @@ from enum import Enum
 
 from agfn.commons import EdgeType
 from agfn.gym import MAG_HITL, LogReward
-from agfn.gflownet import GFlowNet
+from agfn.modules.gflownet import GFlowNet
 
 
 class ElicitationStrategy(Enum):
