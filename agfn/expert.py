@@ -2,6 +2,7 @@ import dspy
 import torch
 
 from abc import ABC, abstractmethod
+from typing import NamedTuple
 
 from agfn.hitl import EdgeType
 
@@ -31,6 +32,11 @@ class FeedbackWithConfidenceSignature(FeedbackWithoutConfidenceSignature):
     confidence: float = dspy.OutputField(
         description="This is the confidence factor for the feedback. It is a value between 0 and 1."
     )
+
+
+class OutputField(NamedTuple):
+    relationship: EdgeType
+    confidence: float
 
 
 class Expert(ABC):
@@ -104,10 +110,10 @@ class LLMOracle(Expert):
             f"{relationship}"
         )
 
-    def _query_llm(self, query: tuple[str, str]) -> str:
+    def _query_llm(self, query: tuple[str, str]) -> OutputField:
         i, j = self.node_pairs[query]
-        prompt = self._get_prompt_context(i, j)
-        return self.llm(query=prompt)
+        context = self._get_prompt_context(i, j)
+        return self.llm(context=context, query=(i, j))
 
     def get_feedback_with_confidence(self, query) -> tuple[EdgeType, float]:
         feedback = self._query_llm(query)
