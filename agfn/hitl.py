@@ -17,18 +17,21 @@ class ElicitationStrategy(Enum):
 
 
 def posterior_from_responses(
-    responses: list, queries: list, num_node_pairs: int, pi: float = 0.95
+    responses: list, queries: list, num_node_pairs: int, pis: list
 ):
-    indices = torch.arange(4).unsqueeze(0).repeat(num_node_pairs, 1)
-    queries = torch.tensor(queries, dtype=torch.long)
-    responses = torch.tensor(responses).unsqueeze(1)
+    indices = (
+        torch.arange(4).unsqueeze(0).repeat(num_node_pairs, 1)
+    )  # (num_node_pairs, 4)
+    queries = torch.tensor(queries, dtype=torch.long)  # (num_node_pairs,)
+    responses = torch.tensor(responses).unsqueeze(1)  # (num_node_pairs, 1)
+    pis = torch.tensor(pis, dtype=torch.float).unsqueeze(1)  # (num_node_pairs, 1)
 
     log_prior = torch.ones((num_node_pairs, 4)) / 4
     log_posterior = log_prior.clone()
 
     log_likelihood = torch.log(
-        pi * (indices[queries] == responses)
-        + (1 - pi) * (indices[queries] != responses) * (1 / 3),
+        pis * (indices[queries] == responses)
+        + (1 - pis) * (indices[queries] != responses) * (1 / 3)
     )
 
     log_posterior.index_add_(0, queries, log_likelihood)
@@ -44,11 +47,12 @@ def find_next_query_from_reward_cross_entropy(
     log_reward: LogReward,
     queries: list,
     responses: list,
+    pis: list,
     num_nodes: int,
     mask_queried_edges: bool = True,
-    pi: float = 0.95,
     initial_state: Optional[MAG_HITL] = None,
     num_iterations: int = 25,
+    prior_pi: float = 0.95,
 ):
     if initial_state is None:
         initial_state = MAG_HITL(num_nodes, batch_size=128, log_reward=log_reward)
@@ -65,15 +69,17 @@ def find_next_query_from_reward_cross_entropy(
     for edge_idx in edge_indices:
         queries_cp = queries.copy()
         responses_cp = responses.copy()
+        pis_cp = pis.copy()
 
         expected_entropy = 0.0
         # First, compute the human-induced posterior distribution
         for response in EdgeType:
             queries_cp.append(edge_idx)
             responses_cp.append(response.value)
+            pis_cp.append(prior_pi)
 
             posterior_dist = posterior_from_responses(
-                responses_cp, queries_cp, num_node_pairs, pi
+                responses_cp, queries_cp, num_node_pairs, pis_cp
             )
 
             gfn.set_posterior(posterior_dist)
@@ -95,16 +101,13 @@ def find_next_query_from_reward_cross_entropy(
 
 
 def find_next_query_from_entropy(
-    queries: list,
-    responses: list,
-    num_nodes: int,
-    pi: float = 0.95,
+    queries: list, responses: list, pis: list, num_nodes: int
 ) -> int:
     posterior = posterior_from_responses(
         responses=responses,
         queries=queries,
         num_node_pairs=num_nodes * (num_nodes - 1) // 2,
-        pi=pi,
+        pis=pis,
     )
 
     entropy = -(posterior * torch.log(posterior)).sum(dim=1)
@@ -122,9 +125,9 @@ def find_next_query(
     log_reward: LogReward,
     queries: list,
     responses: list,
+    pis: list,
     num_nodes: int,
     mask_queried_edges: bool = True,
-    pi: float = 0.95,
     initial_state: Optional[MAG_HITL] = None,
     num_iterations: int = 25,
 ):
@@ -135,14 +138,14 @@ def find_next_query(
                 log_reward,
                 queries,
                 responses,
+                pis,
                 num_nodes,
                 mask_queried_edges,
-                pi,
                 initial_state,
                 num_iterations,
             )
         case ElicitationStrategy.ENTROPY:
-            return find_next_query_from_entropy(queries, responses, num_nodes, pi)
+            return find_next_query_from_entropy(queries, responses, pis, num_nodes)
         case ElicitationStrategy.RANDOM:
             return find_next_query_randomly(num_nodes)
 
@@ -162,11 +165,18 @@ def get_response_from_oracle(query: int, adj: torch.Tensor) -> EdgeType:
 
 
 def log_score_from_responses(
-    states: MAG_HITL, queries: list, responses: list, log_reward_coef: float = 0.5
+    states: MAG_HITL,
+    queries: list,
+    responses: list,
+    log_reward_coef: float = 0.5,
+    pis: list = [],
 ) -> torch.Tensor:
     # log_reward + log_posterior (mean-field approximation)
     log_posterior_dist = (1 - log_reward_coef) * posterior_from_responses(
-        queries=queries, responses=responses, num_node_pairs=states.max_num_edges
+        queries=queries,
+        responses=responses,
+        num_node_pairs=states.max_num_edges,
+        pis=pis,
     ).log()
     log_scores = log_reward_coef * states.log_reward()
 
