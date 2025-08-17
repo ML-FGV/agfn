@@ -253,7 +253,9 @@ class LLMWikipedia(Expert):
     def get_context(self, i: int, j: int) -> str:
         question = f"What is the relationship between {i} and {j}?"
         rag_response = self.colbertv2(question)
-        return json.dumps(rag_response)
+        context = json.dumps(rag_response)
+        self.set_context(context, i, j)
+        return context
 
     def query_expert(self, query: int) -> LLMOutputField:
         i, j = self.node_pairs[query]
