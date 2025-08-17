@@ -1,6 +1,7 @@
 import dspy
 import torch
 import threading
+import json
 
 from abc import abstractmethod
 from typing import NamedTuple, Optional, Callable
@@ -232,20 +233,27 @@ class LLMWikipedia(Expert):
     def __init__(
         self,
         num_nodes: int,
-        url: str = "http://20.102.90.50:2017/wiki17_abstracts",
+        llm_name: str = "ollama_chat/llama3.2",
+        api_base: str = "http://localhost:11434",
+        api_key: str = "",
+        rag_url: str = "http://20.102.90.50:2017/wiki17_abstracts",
         **kwargs,
     ):
         super().__init__(num_nodes)
         del kwargs
-        self.url = url
+        self.rag_url = rag_url
 
-        self.ColBERTv2 = dspy.ColBERTv2(url=url)
+        # Set the default language model for dspy.
+        self.lm = dspy.LM(llm_name, temperature=0.1, api_base=api_base, api_key=api_key)
+        dspy.configure(lm=self.lm)
+
+        self.colbertv2 = dspy.ColBERTv2(url=rag_url)
         self.expert = dspy.ChainOfThought(FeedbackWithConfidenceSignature)
 
     def get_context(self, i: int, j: int) -> str:
         question = f"What is the relationship between {i} and {j}?"
-        rag_response = self.ColBERTv2(question)
-        return "\n".join(rag_response)
+        rag_response = self.colbertv2(question)
+        return json.dumps(rag_response)
 
     def query_expert(self, query: int) -> LLMOutputField:
         i, j = self.node_pairs[query]
