@@ -39,7 +39,7 @@ class AGFN:
         self.pis = []
 
     def create_initial_state(self, batch_size: int = 256) -> MAG_HITL:
-        return MAG_HITL(self.expert.num_nodes, batch_size, self.log_reward)
+        return MAG_HITL(self.log_reward.num_nodes, batch_size, self.log_reward)
 
     def train(
         self,
@@ -109,12 +109,16 @@ class AGFN:
         return graphs, log_scores
 
     def posterior_from_responses(self):
-        indices = torch.arange(4).unsqueeze(0).repeat(self.expert.num_node_pairs, 1)
+        num_node_pairs = (
+            self.log_reward.num_nodes * (self.log_reward.num_nodes - 1)
+        ) // 2
+
+        indices = torch.arange(4).unsqueeze(0).repeat(num_node_pairs, 1)
         queries = torch.tensor(self.queries, dtype=torch.long)
         responses = torch.tensor(self.responses).unsqueeze(1)
         pis = torch.tensor(self.pis, dtype=torch.float).unsqueeze(1)
 
-        log_prior = torch.ones((self.expert.num_node_pairs, 4)) / 4
+        log_prior = torch.ones((num_node_pairs, 4)) / 4
         log_posterior = log_prior.clone()
 
         log_likelihood = torch.log(
@@ -138,7 +142,10 @@ class AGFN:
         if initial_state is None:
             initial_state = self.create_initial_state(batch_size=128)
 
-        edge_indices = np.arange(self.expert.num_node_pairs)
+        num_node_pairs = (
+            self.log_reward.num_nodes * (self.log_reward.num_nodes - 1) // 2
+        )
+        edge_indices = np.arange(num_node_pairs)
         if mask_queried_edges:
             edge_indices = np.setdiff1d(edge_indices, self.queries)
 
@@ -183,7 +190,7 @@ class AGFN:
         return entropy.argmax().item()
 
     def find_next_query_randomly(self) -> int:
-        num_edges = self.expert.num_nodes * (self.expert.num_nodes - 1) // 2
+        num_edges = self.log_reward.num_nodes * (self.log_reward.num_nodes - 1) // 2
         return np.random.choice(num_edges)
 
     def find_next_query(

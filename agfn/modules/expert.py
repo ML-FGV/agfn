@@ -3,7 +3,7 @@ import torch
 import threading
 
 from abc import abstractmethod
-from typing import NamedTuple, Optional
+from typing import NamedTuple, Optional, Callable
 from enum import Enum
 from collections import Counter
 
@@ -15,8 +15,7 @@ from agfn.commons import EdgeType
 class ExpertType(Enum):
     ORACLE = "oracle"
     LLM_ORACLE = "llm_oracle"
-    MULTI_STAGE_LLM_ORACLE = "multi_stage_llm_oracle"
-    ENSEMBLE_LLM_ORACLE = "ensemble_llm_oracle"
+    LLM_WIKIPEDIA = "llm_wikipedia"
 
 
 class FeedbackWithoutConfidenceSignature(dspy.Signature):
@@ -111,6 +110,8 @@ class Expert(dspy.Module):
         self.num_node_pairs = len(self.node_pairs)
         self.with_confidence = with_confidence
 
+        self.context_cache = {}
+
     @abstractmethod
     def get_feedback_with_confidence(self, query) -> tuple[EdgeType, float]:
         pass
@@ -131,6 +132,15 @@ class Expert(dspy.Module):
 
     def set_with_confidence(self, with_confidence: bool):
         self.with_confidence = with_confidence
+
+    def get_context(self, node_i: int, node_j: int) -> str:
+        raise NotImplementedError("This method should be implemented by the subclass.")
+
+    def set_context(self, context: str, node_i: int, node_j: int):
+        self.context_cache[(node_i, node_j)] = context
+
+    def query_expert(self, query: int) -> LLMOutputField:
+        raise NotImplementedError("This method should be implemented by the subclass.")
 
 
 class Oracle(Expert):
@@ -184,7 +194,10 @@ class LLMOracle(Expert):
         # Create the LLM agent.
         self.expert = dspy.ChainOfThought(FeedbackWithConfidenceSignature)
 
-    def _get_prompt_context(self, i: int, j: int) -> str:
+    def get_context(self, i: int, j: int) -> str:
+        if (i, j) in self.context_cache:
+            return self.context_cache[(i, j)]
+
         if self.adj[i, j] == 1 and self.adj[j, i] == 1:
             relationship = f"We know that node {i} and node {j} are indirectly associated, via latent confounding."
         elif self.adj[i, j] == 1:
@@ -194,46 +207,72 @@ class LLMOracle(Expert):
         else:
             relationship = f"We know that node {i} and node {j} have no relationship."
 
-        return (
+        context = (
             "You are given a pair of nodes and a context. \n"
             "You need to return the nature of the relationship between the input nodes. \n"
             f"{relationship}"
         )
+        self.set_context(context, i, j)
+        return context
 
-    def _query_llm(self, query: int) -> LLMOutputField:
+    def query_expert(self, query: int) -> LLMOutputField:
         i, j = self.node_pairs[query]
-        context = self._get_prompt_context(i, j)
+        context = self.get_context(i, j)
         return self.expert(context=context, query=(str(i), str(j)))
 
     def get_feedback_with_confidence(self, query) -> tuple[EdgeType, float]:
-        feedback = self._query_llm(query)
+        feedback = self.query_expert(query)
         return feedback.relationship, feedback.confidence
 
     def get_feedback(self, query) -> EdgeType:
-        return self._query_llm(query).relationship
+        return self.query_expert(query).relationship
 
 
-class MultiStageLLMOracle(LLMOracle):
+class LLMWikipedia(Expert):
     def __init__(
         self,
         num_nodes: int,
-        adj: torch.Tensor,
-        llm_name: str = "ollama_chat/llama3.2",
-        api_base: str = "http://localhost:11434",
-        api_key: str = "",
-        max_depth: int = 2,
+        url: str = "http://20.102.90.50:2017/wiki17_abstracts",
         **kwargs,
     ):
-        super().__init__(num_nodes, adj, llm_name, api_base, api_key, **kwargs)
+        super().__init__(num_nodes)
+        del kwargs
+        self.url = url
 
+        self.ColBERTv2 = dspy.ColBERTv2(url=url)
+        self.expert = dspy.ChainOfThought(FeedbackWithConfidenceSignature)
+
+    def get_context(self, i: int, j: int) -> str:
+        question = f"What is the relationship between {i} and {j}?"
+        rag_response = self.ColBERTv2(question)
+        return "\n".join(rag_response)
+
+    def query_expert(self, query: int) -> LLMOutputField:
+        i, j = self.node_pairs[query]
+        context = self.get_context(i, j)
+        return self.expert(context=context, query=(str(i), str(j)))
+
+    def get_feedback_with_confidence(self, query) -> tuple[EdgeType, float]:
+        response = self.query_expert(query)
+        return response.relationship, response.confidence
+
+    def get_feedback(self, query) -> EdgeType:
+        response = self.query_expert(query)
+        return response.relationship
+
+
+class MultiStageLLM(Expert):
+    def __init__(self, base_expert: Expert, max_depth: int = 2, **kwargs):
+        self.base_expert = base_expert
         self.judger = dspy.ChainOfThought(JudgementSignatureWithConfidence)
 
         # This is the depth of the recursive self-improvement process.
         self.max_depth = max_depth
+        self.with_confidence = self.base_expert.with_confidence
         assert self.max_depth > 0, "The maximum depth must be greater than 0."
 
     def _get_judgement_context(self, node_i: int, node_j: int) -> str:
-        context = self._get_prompt_context(node_i, node_j)
+        context = self.base_expert.get_context(node_i, node_j)
         return (
             "You are given a pair of nodes and a reasoning process. \n"
             "The nature on the relationship between the input nodes has been proposed by an LLM. \n"
@@ -250,11 +289,11 @@ class MultiStageLLMOracle(LLMOracle):
         tentative_confidence: float = None,
         tentative_reasoning: str = None,
     ) -> JudgementSignatureWithConfidence:
-        node_i, node_j = self.node_pairs[query]
+        node_i, node_j = self.base_expert.node_pairs[query]
         node_i, node_j = node_i.item(), node_j.item()
         if depth == 0:
             # Query the proposer.
-            proposed_answer = self._query_llm(query)
+            proposed_answer = self.base_expert.query_expert(query)
             return self._query_judger(
                 query,
                 depth + 1,
@@ -314,30 +353,22 @@ class MultiStageLLMOracle(LLMOracle):
         return judgement.relationship
 
 
-class EnsembleLLMOracle(Expert):
+class EnsembleLLM(Expert):
     experts: list[Expert]
 
     def __init__(
         self,
-        num_nodes: int,
-        adj: torch.Tensor,
-        llm_name: str = "ollama_chat/llama3.2",
-        api_base: str = "http://localhost:11434",
-        api_key: str = "",
-        max_depth: int = 2,
+        expert_constructor: Callable[[], Expert],
         ensemble_size: int = 10,
         **kwargs,
     ):
-        super().__init__(num_nodes)
         del kwargs
 
         self.ensemble_size = ensemble_size
-        self.experts = [
-            MultiStageLLMOracle(num_nodes, adj, llm_name, api_base, api_key, max_depth)
-            for _ in range(ensemble_size)
-        ]
+        self.experts = [expert_constructor() for _ in range(ensemble_size)]
 
         self.response_by_expert_id = {}
+        self.with_confidence = all(expert.with_confidence for expert in self.experts)
 
     def majority_vote(
         self, responses: list[EdgeType], confidences: list[float]

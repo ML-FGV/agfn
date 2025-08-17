@@ -4,8 +4,9 @@ from agfn.modules.expert import (
     ExpertType,
     Oracle,
     LLMOracle,
-    MultiStageLLMOracle,
-    EnsembleLLMOracle,
+    LLMWikipedia,
+    MultiStageLLM,
+    EnsembleLLM,
 )
 from agfn.modules.agfn import AGFN, ElicitationStrategy
 
@@ -36,14 +37,31 @@ def create_expert(
             expert = Oracle(**kwargs)
         case ExpertType.LLM_ORACLE:
             expert = LLMOracle(**kwargs)
-        case ExpertType.MULTI_STAGE_LLM_ORACLE:
-            expert = MultiStageLLMOracle(**kwargs)
-        case ExpertType.ENSEMBLE_LLM_ORACLE:
-            expert = EnsembleLLMOracle(**kwargs)
-
+        case ExpertType.LLM_WIKIPEDIA:
+            expert = LLMWikipedia(**kwargs)
     expert.set_with_confidence(with_confidence)
 
     return expert
+
+
+def create_multi_stage_llm(base_expert: Expert, max_depth: int = 2) -> MultiStageLLM:
+    return MultiStageLLM(base_expert, max_depth=max_depth)
+
+
+def create_expert_ensemble(
+    expert_type: ExpertType,
+    with_confidence: bool = False,
+    ensemble_size: int = 10,
+    max_depth: int = 1,
+    **kwargs,
+) -> EnsembleLLM:
+    def expert_constructor():
+        base_expert = create_expert(expert_type, with_confidence, **kwargs)
+        if max_depth < 1:
+            return base_expert
+        return create_multi_stage_llm(base_expert, max_depth=max_depth)
+
+    return EnsembleLLM(expert_constructor, ensemble_size=ensemble_size)
 
 
 def create_agfn(
@@ -55,7 +73,9 @@ def create_agfn(
     gflownet_kwargs: dict = {},
     expert_kwargs: dict = {},
 ) -> AGFN:
-    expert = create_expert(expert_type, expert_with_confidence, **expert_kwargs)
-    gflownet = create_gflownet(expert.num_nodes, **gflownet_kwargs)
+    expert = create_expert_ensemble(
+        expert_type, expert_with_confidence, **expert_kwargs
+    )
+    gflownet = create_gflownet(log_reward.num_nodes, **gflownet_kwargs)
 
     return AGFN(gflownet, expert, strategy, log_reward, prior_pi)
