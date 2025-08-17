@@ -5,6 +5,7 @@ from agfn.modules.expert import (
     Oracle,
     LLMOracle,
     MultiStageLLMOracle,
+    EnsembleLLMOracle,
 )
 from agfn.modules.agfn import AGFN, ElicitationStrategy
 
@@ -37,6 +38,8 @@ def create_expert(
             expert = LLMOracle(**kwargs)
         case ExpertType.MULTI_STAGE_LLM_ORACLE:
             expert = MultiStageLLMOracle(**kwargs)
+        case ExpertType.ENSEMBLE_LLM_ORACLE:
+            expert = EnsembleLLMOracle(**kwargs)
 
     expert.set_with_confidence(with_confidence)
 

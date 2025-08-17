@@ -1,9 +1,11 @@
 import dspy
 import torch
+import threading
 
 from abc import abstractmethod
 from typing import NamedTuple, Optional
 from enum import Enum
+from collections import Counter
 
 from dspy.adapters.json_adapter import AdapterParseError
 
@@ -14,6 +16,7 @@ class ExpertType(Enum):
     ORACLE = "oracle"
     LLM_ORACLE = "llm_oracle"
     MULTI_STAGE_LLM_ORACLE = "multi_stage_llm_oracle"
+    ENSEMBLE_LLM_ORACLE = "ensemble_llm_oracle"
 
 
 class FeedbackWithoutConfidenceSignature(dspy.Signature):
@@ -309,3 +312,95 @@ class MultiStageLLMOracle(LLMOracle):
     def get_feedback(self, query) -> EdgeType:
         judgement = self._query_judger(query)
         return judgement.relationship
+
+
+class EnsembleLLMOracle(Expert):
+    experts: list[Expert]
+
+    def __init__(
+        self,
+        num_nodes: int,
+        adj: torch.Tensor,
+        llm_name: str = "ollama_chat/llama3.2",
+        api_base: str = "http://localhost:11434",
+        api_key: str = "",
+        max_depth: int = 2,
+        ensemble_size: int = 10,
+        **kwargs,
+    ):
+        super().__init__(num_nodes)
+        del kwargs
+
+        self.ensemble_size = ensemble_size
+        self.experts = [
+            MultiStageLLMOracle(num_nodes, adj, llm_name, api_base, api_key, max_depth)
+            for _ in range(ensemble_size)
+        ]
+
+        self.response_by_expert_id = {}
+
+    def majority_vote(
+        self, responses: list[EdgeType], confidences: list[float]
+    ) -> EdgeType:
+        # Select the response with the highest count
+        counts = Counter(responses)
+        response_with_highest_count = max(counts, key=counts.get)
+        # Compute the average confidence of the responses with the highest count
+
+        if any(confidence is None for confidence in confidences):
+            return response_with_highest_count, None
+
+        confidences_with_highest_count = [
+            confidence
+            for response, confidence in zip(responses, confidences)
+            if response == response_with_highest_count
+        ]
+        confidence = (
+            sum(confidences_with_highest_count) / counts[response_with_highest_count]
+        )
+
+        return response_with_highest_count, confidence
+
+    def _get_feedback_with_confidence(self, query, expert_id: int):
+        self.response_by_expert_id[expert_id] = self.experts[
+            expert_id
+        ].get_feedback_with_confidence(query)
+
+    def get_feedback_with_confidence(self, query) -> tuple[EdgeType, float]:
+        threads = []
+        for i in range(self.ensemble_size):
+            t = threading.Thread(
+                target=self._get_feedback_with_confidence, args=(query, i)
+            )
+            threads.append(t)
+
+        for t in threads:
+            t.start()
+
+        for t in threads:
+            t.join()
+
+        responses = [self.response_by_expert_id[i] for i in range(self.ensemble_size)]
+        edge_types, confidences = zip(*responses)
+        return self.majority_vote(edge_types, confidences)
+
+    def _get_feedback(self, query, expert_id: int):
+        self.response_by_expert_id[expert_id] = self.experts[expert_id].get_feedback(
+            query
+        )
+
+    def get_feedback(self, query) -> EdgeType:
+        threads = []
+        for i in range(self.ensemble_size):
+            t = threading.Thread(target=self._get_feedback, args=(query, i))
+            threads.append(t)
+
+        for t in threads:
+            t.start()
+
+        for t in threads:
+            t.join()
+
+        edge_types = [self.response_by_expert_id[i] for i in range(self.ensemble_size)]
+        edge_type_majority_vote, _ = self.majority_vote(edge_types)
+        return edge_type_majority_vote
