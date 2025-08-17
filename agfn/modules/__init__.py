@@ -1,5 +1,11 @@
 from agfn.modules.gflownet import GFlowNet
-from agfn.modules.expert import Expert, ExpertType, Oracle, LLMOracle
+from agfn.modules.expert import (
+    Expert,
+    ExpertType,
+    Oracle,
+    LLMOracle,
+    MultiStageLLMOracle,
+)
 from agfn.modules.agfn import AGFN, ElicitationStrategy
 
 from agfn.policies import ForwardPolicyHITL, BackwardPolicyHITL
@@ -21,23 +27,32 @@ def create_gflownet(
     return gfn
 
 
-def create_expert(expert_type: ExpertType, **kwargs) -> Expert:
+def create_expert(
+    expert_type: ExpertType, with_confidence: bool = False, **kwargs
+) -> Expert:
     match expert_type:
         case ExpertType.ORACLE:
-            return Oracle(**kwargs)
+            expert = Oracle(**kwargs)
         case ExpertType.LLM_ORACLE:
-            return LLMOracle(**kwargs)
+            expert = LLMOracle(**kwargs)
+        case ExpertType.MULTI_STAGE_LLM_ORACLE:
+            expert = MultiStageLLMOracle(**kwargs)
+
+    expert.set_with_confidence(with_confidence)
+
+    return expert
 
 
 def create_agfn(
     expert_type: ExpertType,
     strategy: ElicitationStrategy,
     log_reward: LogReward,
+    expert_with_confidence: bool = False,
     prior_pi: float = 0.95,
     gflownet_kwargs: dict = {},
     expert_kwargs: dict = {},
 ) -> AGFN:
-    expert = create_expert(expert_type, **expert_kwargs)
+    expert = create_expert(expert_type, expert_with_confidence, **expert_kwargs)
     gflownet = create_gflownet(expert.num_nodes, **gflownet_kwargs)
 
     return AGFN(gflownet, expert, strategy, log_reward, prior_pi)

@@ -154,7 +154,7 @@ class AGFN:
             # First, compute the human-induced posterior distribution
             for response in EdgeType:
                 queries_cp.append(edge_idx)
-                responses_cp.append(response.value)
+                responses_cp.append(response.to_int())
                 pis_cp.append(self.prior_pi)
 
                 posterior_dist = self.posterior_from_responses()
@@ -227,19 +227,19 @@ class AGFN:
 
             # Update the score according to the (expert-induced) posterior distribution
             log_scores[left_causes_right] += log_posterior_dist[
-                idx, EdgeType.LEFT_CAUSES_RIGHT.value
+                idx, EdgeType.LEFT_CAUSES_RIGHT.to_int()
             ]
 
             log_scores[right_causes_left] += log_posterior_dist[
-                idx, EdgeType.RIGHT_CAUSES_LEFT.value
+                idx, EdgeType.RIGHT_CAUSES_LEFT.to_int()
             ]
 
             log_scores[latent_confounding] += log_posterior_dist[
-                idx, EdgeType.LATENT_CONFOUNDING.value
+                idx, EdgeType.LATENT_CONFOUNDING.to_int()
             ]
 
             log_scores[no_relation] += log_posterior_dist[
-                idx, EdgeType.NO_RELATIONSHIP.value
+                idx, EdgeType.NO_RELATIONSHIP.to_int()
             ]
 
         return log_scores
@@ -254,12 +254,7 @@ class AGFN:
         self.responses = []
         self.pis = []
 
-    def feedback_loop(
-        self,
-        num_feedbacks: int = None,
-        expert_returns_confidence: bool = False,
-        progress_bar: bool = True,
-    ):
+    def feedback_loop(self, num_feedbacks: int = None, progress_bar: bool = True):
         initial_state = self.create_initial_state(batch_size=256)
 
         if num_feedbacks is None:
@@ -273,14 +268,14 @@ class AGFN:
                 prior_pi=1 - 1e-3,
             )
 
-            if expert_returns_confidence:
-                response, confidence = self.expert.get_feedback_with_confidence(query)
-            else:
-                response = self.expert.get_feedback(query)
-                confidence = self.prior_pi
+            response = self.expert(query)
 
             self.queries.append(query)
-            self.responses.append(response.value)
-            self.pis.append(confidence)
+            self.responses.append(response.relationship.to_int())
+            self.pis.append(
+                response.confidence
+                if response.confidence is not None
+                else self.prior_pi
+            )
 
             self.gflownet.set_posterior(self.posterior_from_responses())

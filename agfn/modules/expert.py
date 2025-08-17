@@ -1,9 +1,11 @@
 import dspy
 import torch
 
-from abc import ABC, abstractmethod
-from typing import NamedTuple
+from abc import abstractmethod
+from typing import NamedTuple, Optional
 from enum import Enum
+
+from dspy.adapters.json_adapter import AdapterParseError
 
 from agfn.commons import EdgeType
 
@@ -11,6 +13,7 @@ from agfn.commons import EdgeType
 class ExpertType(Enum):
     ORACLE = "oracle"
     LLM_ORACLE = "llm_oracle"
+    MULTI_STAGE_LLM_ORACLE = "multi_stage_llm_oracle"
 
 
 class FeedbackWithoutConfidenceSignature(dspy.Signature):
@@ -32,8 +35,17 @@ class FeedbackWithoutConfidenceSignature(dspy.Signature):
     relationship: EdgeType = dspy.OutputField(
         description=(
             "This is the feedback. It describes the nature of the relationship between the input nodes. "
-            "This information should be inferred from the provided context, background knowledge, and the nature of the problem."
+            "This information should be inferred from the provided context, background knowledge, and the nature of the problem. \n"
+            "EdgeType.LEFT_CAUSES_RIGHT means that node query.0 directly causes node query.1. \n"
+            "EdgeType.RIGHT_CAUSES_LEFT means that node query.1 directly causes node query.0. \n"
+            "EdgeType.LATENT_CONFOUNDING means that node query.0 and node query.1 are indirectly associated, via latent confounding. \n"
+            "EdgeType.NO_RELATIONSHIP means that node query.0 and node query.1 have no relationship (no edge between them)."
         )
+    )
+
+    reasoning: str = dspy.OutputField(
+        description="This is the reasoning process that led to the feedback. "
+        "It is a string that describes the reasoning process that led to the feedback."
     )
 
 
@@ -46,19 +58,55 @@ class FeedbackWithConfidenceSignature(FeedbackWithoutConfidenceSignature):
     )
 
 
+class JudgementSignatureWithoutConfidence(FeedbackWithoutConfidenceSignature):
+    tentative_relationship: str = dspy.InputField(
+        description="This is the tentative relationship between the input nodes proposed by an LLM. "
+        "It is a value that indicates the relationship between the input nodes. "
+    )
+    tentative_reasoning: str = dspy.InputField(
+        description="This is the reasoning process that led to the tentative relationship proposed by an LLM. "
+        "It is a string that describes the reasoning process that led to the tentative relationship."
+    )
+
+    judgement: bool = dspy.OutputField(
+        description="This is the judgement of the relationship between the input nodes. "
+        "It is a boolean value that indicates whether the relationship is correct or not."
+    )
+
+
+class JudgementSignatureWithConfidence(JudgementSignatureWithoutConfidence):
+    tentative_confidence: float = dspy.InputField(
+        description="This is the confidence factor for the tentative relationship. It is a value between 0.05 and 0.95.",
+    )
+
+    confidence: float = dspy.OutputField(
+        ge=0.05,
+        le=0.95,
+        multiple_of=0.05,
+        description="This is the confidence factor for the judgement. It is a value between 0.05 and 0.95.",
+    )
+
+
 class LLMOutputField(NamedTuple):
     relationship: EdgeType
     confidence: float
+    reasoning: str
 
 
-class Expert(ABC):
-    def __init__(self, num_nodes: int):
+class ExpertResponse(NamedTuple):
+    relationship: EdgeType
+    confidence: Optional[float] = None
+
+
+class Expert(dspy.Module):
+    def __init__(self, num_nodes: int, with_confidence: bool = False):
         self.num_nodes = num_nodes
         self.node_pairs = torch.triu_indices(
             num_nodes, num_nodes, offset=1
         ).t()  # (num_node_pairs, 2)
 
         self.num_node_pairs = len(self.node_pairs)
+        self.with_confidence = with_confidence
 
     @abstractmethod
     def get_feedback_with_confidence(self, query) -> tuple[EdgeType, float]:
@@ -68,12 +116,30 @@ class Expert(ABC):
     def get_feedback(self, query) -> EdgeType:
         pass
 
+    def forward(self, query) -> ExpertResponse:
+        if self.with_confidence:
+            response = self.get_feedback_with_confidence(query)
+            return ExpertResponse(relationship=response[0], confidence=response[1])
+        else:
+            return ExpertResponse(relationship=self.get_feedback(query))
+
+    def __call__(self, *args, **kwargs) -> ExpertResponse:
+        return super().__call__(*args, **kwargs)
+
+    def set_with_confidence(self, with_confidence: bool):
+        self.with_confidence = with_confidence
+
 
 class Oracle(Expert):
     def __init__(
-        self, num_nodes: int, adj: torch.Tensor, confidence_factor: float = 0.95
+        self,
+        num_nodes: int,
+        adj: torch.Tensor,
+        confidence_factor: float = 0.95,
+        **kwargs,
     ):
         super().__init__(num_nodes)
+        del kwargs
         self.adj = adj
         self.confidence_factor = confidence_factor
 
@@ -101,9 +167,11 @@ class LLMOracle(Expert):
         llm_name: str = "ollama_chat/llama3.2",
         api_base: str = "http://localhost:11434",
         api_key: str = "",
+        **kwargs,
     ):
         super().__init__(num_nodes)
 
+        del kwargs
         self.adj = adj
 
         # Set the default language model for dspy.
@@ -111,7 +179,7 @@ class LLMOracle(Expert):
         dspy.configure(lm=self.lm)
 
         # Create the LLM agent.
-        self.llm = dspy.ChainOfThought(FeedbackWithConfidenceSignature)
+        self.expert = dspy.ChainOfThought(FeedbackWithConfidenceSignature)
 
     def _get_prompt_context(self, i: int, j: int) -> str:
         if self.adj[i, j] == 1 and self.adj[j, i] == 1:
@@ -121,7 +189,7 @@ class LLMOracle(Expert):
         elif self.adj[j, i] == 1:
             relationship = f"We know that node {j} causes node {i}."
         else:
-            relationship = f"We know that node {i} and node {j} are not associated."
+            relationship = f"We know that node {i} and node {j} have no relationship."
 
         return (
             "You are given a pair of nodes and a context. \n"
@@ -129,10 +197,10 @@ class LLMOracle(Expert):
             f"{relationship}"
         )
 
-    def _query_llm(self, query: tuple[str, str]) -> LLMOutputField:
+    def _query_llm(self, query: int) -> LLMOutputField:
         i, j = self.node_pairs[query]
         context = self._get_prompt_context(i, j)
-        return self.llm(context=context, query=(i, j))
+        return self.expert(context=context, query=(str(i), str(j)))
 
     def get_feedback_with_confidence(self, query) -> tuple[EdgeType, float]:
         feedback = self._query_llm(query)
@@ -140,3 +208,104 @@ class LLMOracle(Expert):
 
     def get_feedback(self, query) -> EdgeType:
         return self._query_llm(query).relationship
+
+
+class MultiStageLLMOracle(LLMOracle):
+    def __init__(
+        self,
+        num_nodes: int,
+        adj: torch.Tensor,
+        llm_name: str = "ollama_chat/llama3.2",
+        api_base: str = "http://localhost:11434",
+        api_key: str = "",
+        max_depth: int = 2,
+        **kwargs,
+    ):
+        super().__init__(num_nodes, adj, llm_name, api_base, api_key, **kwargs)
+
+        self.judger = dspy.ChainOfThought(JudgementSignatureWithConfidence)
+
+        # This is the depth of the recursive self-improvement process.
+        self.max_depth = max_depth
+        assert self.max_depth > 0, "The maximum depth must be greater than 0."
+
+    def _get_judgement_context(self, node_i: int, node_j: int) -> str:
+        context = self._get_prompt_context(node_i, node_j)
+        return (
+            "You are given a pair of nodes and a reasoning process. \n"
+            "The nature on the relationship between the input nodes has been proposed by an LLM. \n"
+            "Your goal is to critically assess the proposal and provide a judgement. \n"
+            "In case the judgement is False, you should provide a new proposal. \n"
+            f"*Context*\n: {context}"
+        )
+
+    def _query_judger(
+        self,
+        query: int,
+        depth: int = 0,
+        tentative_relationship: EdgeType = None,
+        tentative_confidence: float = None,
+        tentative_reasoning: str = None,
+    ) -> JudgementSignatureWithConfidence:
+        node_i, node_j = self.node_pairs[query]
+        node_i, node_j = node_i.item(), node_j.item()
+        if depth == 0:
+            # Query the proposer.
+            proposed_answer = self._query_llm(query)
+            return self._query_judger(
+                query,
+                depth + 1,
+                proposed_answer.relationship,
+                proposed_answer.confidence,
+                proposed_answer.reasoning,
+            )
+
+        context = self._get_judgement_context(node_i, node_j)
+        tentative_relationship_str = tentative_relationship.unwrap_into_str(
+            node_i, node_j
+        )
+
+        try:
+            response = self.judger(
+                context=context,
+                query=(str(node_i), str(node_j)),
+                tentative_relationship=tentative_relationship_str,
+                tentative_confidence=tentative_confidence,
+                tentative_reasoning=tentative_reasoning,
+            )
+        except (AdapterParseError, ValueError, RuntimeError) as e:
+            print(
+                f"Error parsing the response from the LLM. Returning the tentative relationship. Error: {e}"
+            )
+            return JudgementSignatureWithConfidence(
+                query=(str(node_i), str(node_j)),
+                context=context,
+                tentative_relationship=tentative_relationship_str,
+                tentative_confidence=tentative_confidence,
+                tentative_reasoning=tentative_reasoning,
+                judgement=True,
+                relationship=tentative_relationship,
+                confidence=tentative_confidence,
+                reasoning=tentative_reasoning,
+            )
+
+        # If the depth is the maximum depth, return the response.
+        if depth == self.max_depth:
+            return response
+
+        # If the depth is not the maximum depth, query the judger again.
+        return self._query_judger(
+            query,
+            depth + 1,
+            response.relationship,
+            response.confidence,
+            response.reasoning,
+        )
+
+    def get_feedback_with_confidence(self, query) -> tuple[EdgeType, float]:
+        judgement = self._query_judger(query)
+        return judgement.relationship, judgement.confidence
+
+    def get_feedback(self, query) -> EdgeType:
+        judgement = self._query_judger(query)
+        return judgement.relationship
