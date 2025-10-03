@@ -46,15 +46,15 @@ class MAG_HITL(MAG):
 
         self.left_causes_right_action_indices = (
             torch.arange(self.max_num_edges)
-            + self.max_num_edges * EdgeType.LEFT_CAUSES_RIGHT.to_int()
+            + self.max_num_edges * EdgeType.LEFT_CAUSES_RIGHT.value
         )
         self.right_causes_left_action_indices = (
             torch.arange(self.max_num_edges)
-            + self.max_num_edges * EdgeType.RIGHT_CAUSES_LEFT.to_int()
+            + self.max_num_edges * EdgeType.RIGHT_CAUSES_LEFT.value
         )
         self.latent_confounding_action_indices = (
             torch.arange(self.max_num_edges)
-            + self.max_num_edges * EdgeType.LATENT_CONFOUNDING.to_int()
+            + self.max_num_edges * EdgeType.LATENT_CONFOUNDING.value
         )
 
         # A forward action corresponds to adding a edge of a given type
@@ -223,7 +223,7 @@ class MAG_HITL(MAG):
 
         # Check the edge type based on the index
         edge_types = indices.numpy() // self.max_num_edges
-        edge_types = np.array([EdgeType.from_int(et) for et in edge_types])
+        edge_types = np.array([EdgeType(et) for et in edge_types])
 
         (left_causes_right_indices,) = np.where(
             (edge_types == EdgeType.LEFT_CAUSES_RIGHT) & can_add_edges

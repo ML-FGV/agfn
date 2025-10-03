@@ -53,15 +53,11 @@ class LogReward(LogRewardMeta):
         super(LogReward, self).__init__(device=device, temperature=temperature)
         if dataset is not None:
             self.dataset = nn.Parameter(dataset.to(device), requires_grad=False)
-            self.num_nodes = self.dataset.shape[1]
         else:
-            # The dataset is initialized as a tensor that will be later filled with stored values.
             self.dataset = nn.Parameter(
                 torch.zeros((num_samples, num_nodes), device=device),
                 requires_grad=False,
             )
-            self.num_nodes = num_nodes
-
         self.gamma = nn.Parameter(
             torch.tensor(gamma, device=device), requires_grad=False
         )

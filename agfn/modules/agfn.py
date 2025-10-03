@@ -39,7 +39,7 @@ class AGFN:
         self.pis = []
 
     def create_initial_state(self, batch_size: int = 256) -> MAG_HITL:
-        return MAG_HITL(self.log_reward.num_nodes, batch_size, self.log_reward)
+        return MAG_HITL(self.expert.num_nodes, batch_size, self.log_reward)
 
     def train(
         self,
@@ -109,16 +109,12 @@ class AGFN:
         return graphs, log_scores
 
     def posterior_from_responses(self):
-        num_node_pairs = (
-            self.log_reward.num_nodes * (self.log_reward.num_nodes - 1)
-        ) // 2
-
-        indices = torch.arange(4).unsqueeze(0).repeat(num_node_pairs, 1)
+        indices = torch.arange(4).unsqueeze(0).repeat(self.expert.num_node_pairs, 1)
         queries = torch.tensor(self.queries, dtype=torch.long)
         responses = torch.tensor(self.responses).unsqueeze(1)
         pis = torch.tensor(self.pis, dtype=torch.float).unsqueeze(1)
 
-        log_prior = torch.ones((num_node_pairs, 4)) / 4
+        log_prior = torch.ones((self.expert.num_node_pairs, 4)) / 4
         log_posterior = log_prior.clone()
 
         log_likelihood = torch.log(
@@ -142,10 +138,7 @@ class AGFN:
         if initial_state is None:
             initial_state = self.create_initial_state(batch_size=128)
 
-        num_node_pairs = (
-            self.log_reward.num_nodes * (self.log_reward.num_nodes - 1) // 2
-        )
-        edge_indices = np.arange(num_node_pairs)
+        edge_indices = np.arange(self.expert.num_node_pairs)
         if mask_queried_edges:
             edge_indices = np.setdiff1d(edge_indices, self.queries)
 
@@ -161,7 +154,7 @@ class AGFN:
             # First, compute the human-induced posterior distribution
             for response in EdgeType:
                 queries_cp.append(edge_idx)
-                responses_cp.append(response.to_int())
+                responses_cp.append(response.value)
                 pis_cp.append(self.prior_pi)
 
                 posterior_dist = self.posterior_from_responses()
@@ -190,7 +183,7 @@ class AGFN:
         return entropy.argmax().item()
 
     def find_next_query_randomly(self) -> int:
-        num_edges = self.log_reward.num_nodes * (self.log_reward.num_nodes - 1) // 2
+        num_edges = self.expert.num_nodes * (self.expert.num_nodes - 1) // 2
         return np.random.choice(num_edges)
 
     def find_next_query(
@@ -234,19 +227,19 @@ class AGFN:
 
             # Update the score according to the (expert-induced) posterior distribution
             log_scores[left_causes_right] += log_posterior_dist[
-                idx, EdgeType.LEFT_CAUSES_RIGHT.to_int()
+                idx, EdgeType.LEFT_CAUSES_RIGHT.value
             ]
 
             log_scores[right_causes_left] += log_posterior_dist[
-                idx, EdgeType.RIGHT_CAUSES_LEFT.to_int()
+                idx, EdgeType.RIGHT_CAUSES_LEFT.value
             ]
 
             log_scores[latent_confounding] += log_posterior_dist[
-                idx, EdgeType.LATENT_CONFOUNDING.to_int()
+                idx, EdgeType.LATENT_CONFOUNDING.value
             ]
 
             log_scores[no_relation] += log_posterior_dist[
-                idx, EdgeType.NO_RELATIONSHIP.to_int()
+                idx, EdgeType.NO_RELATIONSHIP.value
             ]
 
         return log_scores
@@ -261,7 +254,15 @@ class AGFN:
         self.responses = []
         self.pis = []
 
-    def feedback_loop(self, num_feedbacks: int = None, progress_bar: bool = True):
+    def feedback_loop(
+        self,
+        num_feedbacks: int = None,
+        expert_returns_confidence: bool = False,
+        progress_bar: bool = True,
+    ):
+
+        llm_corr_rate = []
+        
         initial_state = self.create_initial_state(batch_size=256)
 
         if num_feedbacks is None:
@@ -275,14 +276,20 @@ class AGFN:
                 prior_pi=1 - 1e-3,
             )
 
-            response = self.expert(query)
+            is_llm_correct = 0
+            if expert_returns_confidence:
+                #response, confidence, is_llm_correct = self.expert.get_feedback_with_confidence(query)
+                response, confidence = self.expert.get_feedback_with_confidence(query)
+            else:
+                response = self.expert.get_feedback(query)
+                confidence = self.prior_pi
 
             self.queries.append(query)
-            self.responses.append(response.relationship.to_int())
-            self.pis.append(
-                response.confidence
-                if response.confidence is not None
-                else self.prior_pi
-            )
+            self.responses.append(response.value)
+            self.pis.append(confidence)
+
+            llm_corr_rate.append(is_llm_correct)
 
             self.gflownet.set_posterior(self.posterior_from_responses())
+
+        return llm_corr_rate
