@@ -10,3 +10,5 @@ uv venv
 source .venv/bin/activate
 uv sync
 ```
+
+The main experiments can be found at examples/agfn.ipynb and Experiments.ipynb.
