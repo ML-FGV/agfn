@@ -47,7 +47,7 @@ def is_mag(carry: tuple[jax.Array, jax.Array, jax.Array], _, *, n: int):
 
 
 def estimate_mags(n: int, num_samples: int):
-    num_edges = n * (n - 1) // 2
+    num_edges = (n * (n - 1)) / 2
     graph_count = 4**num_edges
     # Sample directed graphs uniformly
 
