@@ -114,5 +114,5 @@ def estimate_dags(n: int, num_samples: int):
 
 
 if __name__ == "__main__":
-    print(f"AGs: {estimate_mags(6, 1e6)}")
-    print(f"DAGs: {estimate_dags(6, 1e6)}")
+    print(f"AGs: {estimate_mags(6, 1e6):.2e}")
+    print(f"DAGs: {estimate_dags(6, 1e6):.2e}")
