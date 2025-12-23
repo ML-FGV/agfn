@@ -44,16 +44,14 @@ def sample_uniform_digraph(n: int, key: jax.Array):
 def is_ag(carry: tuple[jax.Array, jax.Array, jax.Array], _, *, n: int):
     count, adj, key = carry
 
-    i_bi, j_bi = jnp.argwhere((adj == adj.T) & (adj == 1), size=n).T
-    i_di, j_di = jnp.argwhere((adj != adj.T) & (adj == 1), size=n).T
+    D = jnp.logical_and(adj != adj.T, adj == 1)
+    B = jnp.logical_and(adj == adj.T, adj == 1)
 
-    D = jnp.zeros_like(adj)
-    B = jnp.zeros_like(adj)
-
-    D = D.at[i_di, j_di].set(1)
-    B = B.at[i_bi, j_bi].set(1)
+    D = jnp.where(D, 1, 0)
+    B = jnp.where(B, 1, 0)
 
     D_exp = jsp.linalg.expm(D)
+
     th = jnp.trace(D_exp) - n + jnp.sum(D_exp * B)
     count += jnp.isclose(th, 0, atol=1e-8)
 
@@ -71,14 +69,14 @@ def is_dag(carry: tuple[jax.Array, jax.Array, jax.Array], _, *, n: int):
     D_sq = jnp.square(adj)
     D_exp = jsp.linalg.expm(D_sq)
 
-    count += (jnp.trace(D_exp) - n) < 1e-8
+    count += jnp.isclose(jnp.trace(D_exp) - n, 0, atol=1e-8)
 
     adj, key = sample_uniform_digraph(n, key)
     return (count, adj, key), _
 
 
 def estimate_mags(n: int, num_samples: int):
-    num_edges = (n * (n - 1)) / 2
+    num_edges = (n * (n - 1)) // 2
     graph_count = 4**num_edges
     # Sample directed graphs uniformly
 
@@ -114,5 +112,9 @@ def estimate_dags(n: int, num_samples: int):
 
 
 if __name__ == "__main__":
-    print(f"AGs: {estimate_mags(6, 1e6):.2e}")
-    print(f"DAGs: {estimate_dags(6, 1e6):.2e}")
+    print(f"AGs [4]: {estimate_mags(4, 1e6):.2e}")
+    print(f"DAGs [4]: {estimate_dags(4, 1e6):.2e}")
+    print(f"AGs [5]: {estimate_mags(5, 1e7):.2e}")
+    print(f"DAGs [5]: {estimate_dags(5, 1e7):.2e}")
+    print(f"AGs [6]: {estimate_mags(6, 1e7):.2e}")
+    print(f"DAGs [6]: {estimate_dags(6, 1e7):.2e}")
