@@ -62,6 +62,7 @@ def evaluate_posterior_pi_unknown(key: jax.Array, _, *, w: int, pi: jax.Array, n
     key, samples = sample(key, num_samples=num_samples, pi=pi)
 
     counts = cumbincount(samples, len(pi))
+    # Uniform prior
     _, log_posterior = jax.lax.scan(
         f=partial(_eval_posterior_unknown_pi, alpha=1, beta=1, num_samples=num_samples),
         init=None,
