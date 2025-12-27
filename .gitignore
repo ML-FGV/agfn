@@ -3,6 +3,7 @@ __pycache__
 *.pdf
 models/
 *.pt 
+*.png
 
 *.egg-info
 
