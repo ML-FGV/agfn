@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from mpl_preamble import *
 
 
-def get_pi(pi_true: int, w: int):
+def get_pi(pi_true: float, w: int):
     pi = jnp.ones((4,)) * (1 - pi_true) / 3
     pi = pi.at[w].set(pi_true)
     return pi
@@ -41,6 +41,30 @@ def evaluate_posterior_pi_fixed(key: jax.Array, _, *, w: int, pi: jax.Array, num
 
     _, log_posterior = jax.lax.scan(
         f=partial(_eval_posterior_pi_fixed, pi=pi, w=w, num_samples=num_samples),
+        init=None,
+        xs=counts,
+    )
+
+    return key, log_posterior
+
+
+def evaluate_posterior_pi_misspecified(
+    key: jax.Array,
+    _,
+    *,
+    w: int,
+    pi: jax.Array,
+    num_samples: int,
+):
+    key, samples = sample(key, num_samples, pi=pi)
+
+    counts = cumbincount(samples, len(pi))
+
+    pi_model = jnp.minimum(pi[w] * 0.7, 1)  # slightly over estimated
+    pi_model = get_pi(pi_model, w)
+
+    _, log_posterior = jax.lax.scan(
+        f=partial(_eval_posterior_pi_fixed, pi=pi_model, w=w, num_samples=num_samples),
         init=None,
         xs=counts,
     )
@@ -132,6 +156,15 @@ if __name__ == "__main__":
         num_samples=num_samples,
     )
 
+    _, log_posterior_pi_misspecified = eval_posterior_multiple_samples(
+        carry=None,
+        pi=pi,
+        func=evaluate_posterior_pi_misspecified,
+        num_rep=100,
+        w=w,
+        num_samples=num_samples,
+    )
+
     _, log_posterior_pi_unknown = eval_posterior_multiple_samples(
         carry=None,
         pi=pi,
@@ -142,19 +175,23 @@ if __name__ == "__main__":
     )
 
     fixed_mu = log_posterior_pi_fixed.mean(axis=0)
+    misspecified_mu = log_posterior_pi_misspecified.mean(axis=0)
     unknown_mu = log_posterior_pi_unknown.mean(axis=0)
 
     fixed_std = log_posterior_pi_fixed.std(axis=0)
+    misspecified_std = log_posterior_pi_misspecified.std(axis=0)
     unknown_std = log_posterior_pi_unknown.std(axis=0)
 
     plt.figure(figsize=(3, 2))
 
     xs = jnp.arange(num_samples)
     plt.plot(xs, fixed_mu[:, w], label="known $\pi$")
+    plt.plot(xs, misspecified_mu[:, w], label="misspecified $\pi$")
     plt.plot(xs, unknown_mu[:, w], label="unknown $\pi$")
 
     a = 0.2
     plt.fill_between(xs, fixed_mu[:, w] - a * fixed_std[:, w], fixed_mu[:, w] + a * fixed_std[:, w], alpha=0.2)
+    plt.fill_between(xs, misspecified_mu[:, w] - a * misspecified_std[:, w], misspecified_mu[:, w] + a * misspecified_std[:, w], alpha=0.2)
     plt.fill_between(xs, unknown_mu[:, w] - a * unknown_std[:, w], unknown_mu[:, w] + a * unknown_std[:, w], alpha=0.2)
     plt.xlabel("\# Feedbacks", size=12)
     plt.ylabel("$\log q_{r}(\omega^{\star} | \mathbf{f}_{r})$", size=12)
@@ -162,3 +199,4 @@ if __name__ == "__main__":
     plt.legend()
 
     plt.savefig("plot_posterior_for_pi.pdf", bbox_inches="tight")
+    plt.show()
