@@ -1,21 +1,17 @@
 [project]
-name = "AGFN"
+name = "agfx"
 version = "0.1.0"
-description = "AGFN"
+description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
-    "dspy>=2.6.27",
-    "ipykernel>=6.29.5",
-    "jax>=0.8.2",
-    "matplotlib>=3.10.1",
-    "numpy>=2.2.5",
-    "pandas>=2.2.3",
-    "rpy2>=3.5.17",
-    "scipy>=1.15.2",
-    "setuptools>=79.0.1",
-    "torch>=2.7.0",
-    "tqdm>=4.67.1",
+    "flax>=0.12.6",
+    "jax>=0.10.0",
+    "matplotlib>=3.10.8",
+    "networkx>=3.6.1",
+    "pytest>=9.0.3",
+    "tqdm>=4.67.3",
+    "typer>=0.24.1",
 ]
 
 [build-system]
