@@ -14,7 +14,9 @@ def get_pi(pi_true: float, w: int):
 
 
 def sample(key: jax.Array, num_samples: int, *, pi: jax.Array):
-    res = jax.random.categorical(key=key, logits=jnp.log(pi), shape=(num_samples,))
+    res = jax.random.categorical(
+        key=key, logits=jnp.log(pi), shape=(num_samples,)
+    )
     _, key = jax.random.split(key)
     return key, res
 
@@ -24,23 +26,31 @@ def cumbincount(samples: jax.Array, size: int):
     return jnp.cumsum(onehot, axis=0)
 
 
-def _eval_posterior_pi_fixed(carry: None, counts: jax.Array, *, pi: jax.Array, w: int, num_samples: int):
+def _eval_posterior_pi_fixed(
+    carry: None, counts: jax.Array, *, pi: jax.Array, w: int, num_samples: int
+):
     # Compute the posterior distribution
     pi_true = pi[w]
     pi_altn = (1 - pi_true) / 3
 
-    log_posterior = counts * jnp.log(pi_true) + (num_samples - counts) * jnp.log(pi_altn)
+    log_posterior = counts * jnp.log(pi_true) + (
+        num_samples - counts
+    ) * jnp.log(pi_altn)
     log_posterior = log_posterior - jax.nn.logsumexp(log_posterior, axis=0)
     return carry, log_posterior
 
 
-def evaluate_posterior_pi_fixed(key: jax.Array, _, *, w: int, pi: jax.Array, num_samples: int):
+def evaluate_posterior_pi_fixed(
+    key: jax.Array, _, *, w: int, pi: jax.Array, num_samples: int
+):
     key, samples = sample(key, num_samples, pi=pi)
 
     counts = cumbincount(samples, len(pi))
 
     _, log_posterior = jax.lax.scan(
-        f=partial(_eval_posterior_pi_fixed, pi=pi, w=w, num_samples=num_samples),
+        f=partial(
+            _eval_posterior_pi_fixed, pi=pi, w=w, num_samples=num_samples
+        ),
         init=None,
         xs=counts,
     )
@@ -64,7 +74,9 @@ def evaluate_posterior_pi_misspecified(
     pi_model = get_pi(pi_model, w)
 
     _, log_posterior = jax.lax.scan(
-        f=partial(_eval_posterior_pi_fixed, pi=pi_model, w=w, num_samples=num_samples),
+        f=partial(
+            _eval_posterior_pi_fixed, pi=pi_model, w=w, num_samples=num_samples
+        ),
         init=None,
         xs=counts,
     )
@@ -72,15 +84,26 @@ def evaluate_posterior_pi_misspecified(
     return key, log_posterior
 
 
-def _eval_posterior_unknown_pi(carry: None, counts: jax.Array, *, alpha: float, beta: float, num_samples: int):
+def _eval_posterior_unknown_pi(
+    carry: None,
+    counts: jax.Array,
+    *,
+    alpha: float,
+    beta: float,
+    num_samples: int,
+):
     alpha = alpha + counts
     beta = beta + counts.sum() - counts
-    log_posterior = jsp.special.betaln(alpha, beta) + jnp.log(3) * (counts - num_samples)
+    log_posterior = jsp.special.betaln(alpha, beta) + jnp.log(3) * (
+        counts - num_samples
+    )
     log_posterior = log_posterior - jax.nn.logsumexp(log_posterior, axis=0)
     return carry, log_posterior
 
 
-def evaluate_posterior_pi_unknown(key: jax.Array, _, *, w: int, pi: jax.Array, num_samples: int):
+def evaluate_posterior_pi_unknown(
+    key: jax.Array, _, *, w: int, pi: jax.Array, num_samples: int
+):
     del w  # used for interface consistency
 
     key, samples = sample(key, num_samples=num_samples, pi=pi)
@@ -88,7 +111,12 @@ def evaluate_posterior_pi_unknown(key: jax.Array, _, *, w: int, pi: jax.Array, n
     counts = cumbincount(samples, len(pi))
     # Uniform prior
     _, log_posterior = jax.lax.scan(
-        f=partial(_eval_posterior_unknown_pi, alpha=1, beta=1, num_samples=num_samples),
+        f=partial(
+            _eval_posterior_unknown_pi,
+            alpha=1,
+            beta=1,
+            num_samples=num_samples,
+        ),
         init=None,
         xs=counts,
     )
@@ -128,7 +156,13 @@ def eval_posterior_multiple_pi(
     num_samples: int,
 ):
     _, log_posterior = jax.lax.scan(
-        f=partial(eval_posterior_multiple_samples, func=func, num_rep=num_rep, w=w, num_samples=num_samples),
+        f=partial(
+            eval_posterior_multiple_samples,
+            func=func,
+            num_rep=num_rep,
+            w=w,
+            num_samples=num_samples,
+        ),
         init=None,
         xs=pis,
     )
@@ -190,9 +224,24 @@ if __name__ == "__main__":
     plt.plot(xs, unknown_mu[:, w], label="unknown $\pi$")
 
     a = 0.2
-    plt.fill_between(xs, fixed_mu[:, w] - a * fixed_std[:, w], fixed_mu[:, w] + a * fixed_std[:, w], alpha=0.2)
-    plt.fill_between(xs, misspecified_mu[:, w] - a * misspecified_std[:, w], misspecified_mu[:, w] + a * misspecified_std[:, w], alpha=0.2)
-    plt.fill_between(xs, unknown_mu[:, w] - a * unknown_std[:, w], unknown_mu[:, w] + a * unknown_std[:, w], alpha=0.2)
+    plt.fill_between(
+        xs,
+        fixed_mu[:, w] - a * fixed_std[:, w],
+        fixed_mu[:, w] + a * fixed_std[:, w],
+        alpha=0.2,
+    )
+    plt.fill_between(
+        xs,
+        misspecified_mu[:, w] - a * misspecified_std[:, w],
+        misspecified_mu[:, w] + a * misspecified_std[:, w],
+        alpha=0.2,
+    )
+    plt.fill_between(
+        xs,
+        unknown_mu[:, w] - a * unknown_std[:, w],
+        unknown_mu[:, w] + a * unknown_std[:, w],
+        alpha=0.2,
+    )
     plt.xlabel("\# Feedbacks", size=12)
     plt.ylabel("$\log q_{r}(\omega^{\star} | \mathbf{f}_{r})$", size=12)
 
